@@ -499,8 +499,7 @@ struct MenuView: View {
 
 private extension ContentTransition {
     /// Returns a numeric content transition suitable for animating balance changes.
-    /// Falls back gracefully across OS versions.
     static func numericTransition(for value: Double) -> ContentTransition {
-        .numericValue(value: value)
+        .numeric(value: value)
     }
 }
