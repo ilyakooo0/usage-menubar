@@ -215,7 +215,7 @@ struct MenuView: View {
                             .font(.system(size: 38, weight: .heavy, design: .rounded))
                             .monospacedDigit()
                             .foregroundColor(viewModel.balanceColor)
-                            .contentTransition(.numericTransition(for: Double(balance)))
+                            .contentTransition(.opacity)
                     } else if viewModel.needsOnboarding {
                         Image(systemName: "bolt.fill")
                             .font(.system(size: 34, weight: .bold))
@@ -492,14 +492,5 @@ struct MenuView: View {
         let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
         let b = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "1"
         return "v\(v).\(b)"
-    }
-}
-
-// MARK: - Numeric content transition helper
-
-private extension ContentTransition {
-    /// Returns a numeric content transition suitable for animating balance changes.
-    static func numericTransition(for value: Double) -> ContentTransition {
-        .numeric(value: value)
     }
 }
