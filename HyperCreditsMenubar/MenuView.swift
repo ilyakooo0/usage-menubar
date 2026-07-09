@@ -28,7 +28,7 @@ final class ViewModel: ObservableObject {
 
     init() {
         apiKeyInput = KeychainHelper.load() ?? ""
-        launchAtLogin = SMAppService.mainApp.status == .registered
+        launchAtLogin = SMAppService.mainApp.status == .enabled
     }
 
     // MARK: - Balance
