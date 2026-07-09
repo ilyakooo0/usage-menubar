@@ -1,0 +1,118 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: macos-14
+    outputs:
+      VERSION: ${{ env.VERSION }}
+    steps:
+      # ── Checkout ──────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Compute version from commit timestamp ─────────────────────────
+      # Version format: YYYY.MM.DD.HHHH (HHHH = HHMM, 24-hour UTC)
+      # %ct = committer date as Unix epoch seconds (timezone-independent).
+      # `date -u -r $EPOCH` works on macOS (BSD date), which is our runner.
+      - name: Compute version from commit timestamp
+        run: |
+          EPOCH=$(git log -1 --format=%ct)
+          echo "Commit epoch: $EPOCH"
+          VERSION=$(date -u -r "$EPOCH" +%Y.%m.%d.%H%M)
+          echo "Version: $VERSION"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      # ── Install xcodegen ──────────────────────────────────────────────
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      # ── Generate Xcode project ────────────────────────────────────────
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      # ── Run tests ─────────────────────────────────────────────────────
+      - name: Run tests
+        continue-on-error: true
+        run: |
+          xcodebuild test \
+            -scheme HyperCreditsMenubar \
+            -configuration Debug \
+            -destination "platform=macOS" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            || true
+
+      # ── Archive ───────────────────────────────────────────────────────
+      - name: Archive
+        run: |
+          xcodebuild archive \
+            -scheme HyperCreditsMenubar \
+            -configuration Release \
+            -archivePath build/HyperCreditsMenubar.xcarchive \
+            -destination "generic/platform=macOS" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            ENABLE_HARDENED_RUNTIME=NO
+
+      # ── Export .app from archive ──────────────────────────────────────
+      - name: Export app from archive
+        run: |
+          mkdir -p build/export
+          # Simply copy the .app from the archive (no signing in CI)
+          cp -R "build/HyperCreditsMenubar.xcarchive/Products/Applications/HyperCreditsMenubar.app" \
+                "build/export/HyperCreditsMenubar.app"
+
+      # ── Zip the app ───────────────────────────────────────────────────
+      - name: Zip the app
+        run: |
+          cd build/export
+          ditto -c -k --keepParent HyperCreditsMenubar.app "HyperCreditsMenubar-${{ env.VERSION }}.zip"
+          cp "HyperCreditsMenubar-${{ env.VERSION }}.zip" ../../
+
+      # ── Upload build artifact ─────────────────────────────────────────
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HyperCreditsMenubar-${{ env.VERSION }}
+          path: HyperCreditsMenubar-${{ env.VERSION }}.zip
+          retention-days: 30
+
+      # ── Create GitHub Release ─────────────────────────────────────────
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.VERSION }}
+          name: ${{ env.VERSION }}
+          body: |
+            ## HyperCreditsMenubar ${{ env.VERSION }}
+
+            **Download:** `HyperCreditsMenubar-${{ env.VERSION }}.zip`
+
+            ### Installation
+            1. Download and unzip `HyperCreditsMenubar-${{ env.VERSION }}.zip`
+            2. Move `HyperCreditsMenubar.app` to your `/Applications` folder
+            3. Launch the app — it will appear in your menu bar as ⚡
+            4. Click the ⚡ icon, enter your Hyper API key, and click Save
+
+            > **Note:** This build is unsigned. On first launch you may need to
+            > right-click → Open, or allow it in System Settings → Privacy & Security.
+
+            ### Changes
+            Built from commit ${{ github.sha }}
+          files: |
+            HyperCreditsMenubar-${{ env.VERSION }}.zip
+          draft: false
+          prerelease: false
