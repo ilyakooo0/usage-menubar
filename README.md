@@ -2,8 +2,6 @@
 
 A macOS menu bar application that displays your [Hyper (Charm)](https://hyper.charm.land) credit balance.
 
-![Screenshot placeholder](docs/screenshot-placeholder.png)
-
 ## Features
 
 - ⚡ **Menu bar display** — shows `⚡{balance}` (e.g. `⚡42`) right in your menu bar
@@ -16,6 +14,19 @@ A macOS menu bar application that displays your [Hyper (Charm)](https://hyper.ch
 - 🫥 **Agent app** — no dock icon, no main window; lives entirely in the menu bar
 
 ## Installation
+
+### Homebrew (recommended)
+
+```bash
+brew tap ilyakooo0/tap
+brew install --cask hyper-credits-menubar
+```
+
+Or in one command:
+
+```bash
+brew install --cask ilyakooo0/tap/hyper-credits-menubar
+```
 
 ### Download the pre-built release
 
