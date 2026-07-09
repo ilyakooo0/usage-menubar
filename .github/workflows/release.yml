@@ -80,7 +80,10 @@ jobs:
         run: |
           cd build/export
           ditto -c -k --keepParent HyperCreditsMenubar.app "HyperCreditsMenubar-${{ env.VERSION }}.zip"
+          # Also create a stable-named zip for the Homebrew Cask
+          cp "HyperCreditsMenubar-${{ env.VERSION }}.zip" "HyperCreditsMenubar-latest.zip"
           cp "HyperCreditsMenubar-${{ env.VERSION }}.zip" ../../
+          cp "HyperCreditsMenubar-latest.zip" ../../
 
       # ── Upload build artifact ─────────────────────────────────────────
       - name: Upload build artifact
@@ -114,5 +117,6 @@ jobs:
             Built from commit ${{ github.sha }}
           files: |
             HyperCreditsMenubar-${{ env.VERSION }}.zip
+            HyperCreditsMenubar-latest.zip
           draft: false
           prerelease: false
