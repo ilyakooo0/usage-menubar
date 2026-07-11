@@ -4,49 +4,77 @@ import SwiftUI
 struct MenuView: View {
     @ObservedObject var viewModel: ViewModel
 
+    /// Dims the balance while the pointer is over it, hinting that it is clickable.
+    @State private var isHoveringBalance = false
+
     private static let websiteURL = URL(string: "https://hyper.charm.land")!
+
+    // MARK: - Type Scale
+
+    /// One rounded family at four sizes. The balance is the only large element and
+    /// everything else steps down from it, so nothing competes with it for attention.
+    /// Monospaced digits keep the balance from jittering as its digits change.
+    private static let heroFont = Font.system(size: 46, weight: .semibold, design: .rounded)
+        .monospacedDigit()
+    private static let sectionFont = Font.system(size: 12, weight: .semibold, design: .rounded)
+    private static let controlFont = Font.system(size: 12, weight: .regular, design: .rounded)
+    private static let captionFont = Font.system(size: 11, weight: .medium, design: .rounded)
+    private static let footnoteFont = Font.system(size: 10, weight: .regular, design: .rounded)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             hero
+            hairline
             settings
+            hairline
             footer
         }
-        .padding(16)
+        .padding(.horizontal, 18)
+        .padding(.top, 18)
+        .padding(.bottom, 14)
         .frame(width: 280)
+        // Set as the environment font so the controls inherit the rounded design too.
+        .font(Self.controlFont)
+        .background(Color(nsColor: .windowBackgroundColor))
         .animation(.easeInOut(duration: 0.2), value: viewModel.savedConfirmation)
         .animation(.easeInOut(duration: 0.2), value: viewModel.copiedConfirmation)
+        .animation(.easeInOut(duration: 0.2), value: viewModel.errorMessage)
+        .animation(.easeInOut(duration: 0.25), value: viewModel.balance)
+        .animation(.easeInOut(duration: 0.25), value: viewModel.isLoading)
+        .animation(.easeInOut(duration: 0.3), value: historyValues.count)
+    }
+
+    /// A section rule light enough to read as a pause rather than a border.
+    private var hairline: some View {
+        Divider().opacity(0.3)
     }
 
     // MARK: - Hero
 
     private var hero: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 8) {
             if viewModel.isLoading && viewModel.balance == nil {
-                ProgressView()
-                    .scaleEffect(0.8)
-                    .frame(height: 50)
-                Text("Loading…")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                PulsingBolt()
+                    .transition(.opacity)
             } else {
-                balanceNumber
-                caption
-                sparkline
+                VStack(spacing: 6) {
+                    balanceNumber
+                    caption
+                    sparkline
+                }
+                .transition(.opacity)
             }
 
             if let lastUpdatedText = viewModel.lastUpdatedText {
                 Text(lastUpdatedText)
-                    .font(.caption2)
+                    .font(Self.footnoteFont)
                     .foregroundColor(.secondary)
+                    .transition(.opacity)
             }
 
             if let error = viewModel.errorMessage {
-                Text(error)
-                    .font(.caption)
-                    .foregroundColor(.red)
-                    .multilineTextAlignment(.center)
-                    .padding(.top, 2)
+                errorRow(error)
+                    .transition(.opacity)
             }
         }
         .frame(maxWidth: .infinity)
@@ -57,19 +85,26 @@ struct MenuView: View {
         Button(action: { viewModel.copyBalanceToClipboard() }) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(viewModel.formattedBalance)
-                    .font(.system(size: 42, weight: .bold, design: .rounded))
+                    .font(Self.heroFont)
                     .foregroundColor(viewModel.balanceColor)
+                    .contentTransition(.opacity)
 
                 if let symbol = viewModel.balanceTrend.symbolName {
                     Image(systemName: symbol)
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundColor(.secondary)
+                        .transition(.opacity)
                 }
             }
+            // Without this the hover area is only the glyphs themselves.
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(viewModel.balance == nil)
         .help("Click to copy")
+        .opacity(isHoveringBalance && viewModel.balance != nil ? 0.65 : 1)
+        .onHover { isHoveringBalance = $0 }
+        .animation(.easeInOut(duration: 0.12), value: isHoveringBalance)
     }
 
     /// Doubles as the copy confirmation so the layout doesn't shift.
@@ -83,54 +118,89 @@ struct MenuView: View {
                     .foregroundColor(.secondary)
             }
         }
-        .font(.caption)
+        .font(Self.captionFont)
     }
 
     @ViewBuilder
     private var sparkline: some View {
-        // Key paths can't index tuple elements, so this stays a closure.
-        let values = viewModel.balanceHistory.map { $0.balance }
-        if values.count >= 2 {
-            Sparkline(values: values)
-                .frame(height: 24)
-                .padding(.top, 2)
+        if historyValues.count >= 2 {
+            Sparkline(values: historyValues, color: viewModel.balanceColor)
+                .frame(height: 26)
+                .padding(.top, 4)
+                .transition(.opacity)
         }
+    }
+
+    /// The sparkline's data. Key paths can't index tuple elements, so this stays a closure.
+    private var historyValues: [Int] {
+        viewModel.balanceHistory.map { $0.balance }
+    }
+
+    /// Errors read as a quiet inline notice rather than loose red text: an icon, the
+    /// message, and a tinted rounded background with no border.
+    private func errorRow(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 10, weight: .semibold))
+
+            Text(message)
+                .font(Self.captionFont)
+                // Long messages wrap instead of being truncated to one line.
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: 0)
+        }
+        .foregroundColor(.red)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.red.opacity(0.1))
+        )
+        .padding(.top, 2)
     }
 
     // MARK: - Settings
 
     private var settings: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Divider()
-
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
                     Text("API Key")
-                        .font(.headline)
-                    Spacer()
-                    Link("Get key →", destination: Self.websiteURL)
-                        .font(.caption)
+                        .font(Self.sectionFont)
+
+                    Spacer(minLength: 0)
+
+                    // The confirmation takes the link's place rather than adding a row
+                    // of its own, so saving never resizes the popover.
+                    if viewModel.savedConfirmation {
+                        Text("✓ Saved")
+                            .font(Self.captionFont)
+                            .foregroundColor(.green)
+                            .transition(.opacity)
+                    } else {
+                        Link("Get key →", destination: Self.websiteURL)
+                            .font(Self.captionFont)
+                            .transition(.opacity)
+                    }
                 }
 
-                HStack {
-                    SecureField("sk-...", text: $viewModel.apiKeyInput)
+                HStack(spacing: 8) {
+                    SecureField("sk-…", text: $viewModel.apiKeyInput)
                         .textFieldStyle(.roundedBorder)
+
                     Button("Save") {
                         viewModel.saveAPIKey()
                     }
                 }
-
-                if viewModel.savedConfirmation {
-                    Text("✓ Saved")
-                        .font(.caption)
-                        .foregroundColor(.green)
-                        .transition(.opacity)
-                }
+                .controlSize(.small)
             }
 
             HStack {
                 Text("Refresh every")
-                Spacer()
+
+                Spacer(minLength: 0)
+
                 Picker("Refresh every", selection: $viewModel.refreshIntervalMinutes) {
                     ForEach(RefreshInterval.options, id: \.self) { minutes in
                         Text("\(minutes)m").tag(minutes)
@@ -139,83 +209,165 @@ struct MenuView: View {
                 .pickerStyle(.menu)
                 .labelsHidden()
                 .fixedSize()
+                .controlSize(.small)
             }
 
             Toggle("Launch at Login", isOn: $viewModel.launchAtLogin)
                 .toggleStyle(.switch)
+                .controlSize(.small)
         }
     }
 
     // MARK: - Footer
 
     private var footer: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Divider()
-
+        VStack(spacing: 14) {
             HStack {
                 Button(action: { viewModel.refresh() }) {
                     Label("Refresh", systemImage: "arrow.clockwise")
                 }
                 .disabled(viewModel.isLoading)
 
-                Spacer()
+                Spacer(minLength: 12)
 
                 Button("Quit") {
                     NSApplication.shared.terminate(nil)
                 }
                 .keyboardShortcut("q")
             }
+            .controlSize(.small)
 
             Link("hyper.charm.land", destination: Self.websiteURL)
-                .font(.caption2)
+                .font(Self.footnoteFont)
                 .foregroundColor(.secondary)
+                .opacity(0.7)
                 .frame(maxWidth: .infinity, alignment: .center)
         }
     }
 }
 
+// MARK: - Loading
+
+/// The loading state, before there has ever been a balance to show. Reuses the ⚡ from
+/// the menu bar title rather than a generic spinner, so the two read as the same app.
+private struct PulsingBolt: View {
+    @State private var isPulsing = false
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Text("⚡")
+                .font(.system(size: 34))
+                .opacity(isPulsing ? 0.35 : 1)
+                .scaleEffect(isPulsing ? 0.94 : 1)
+                .animation(
+                    .easeInOut(duration: 0.9).repeatForever(autoreverses: true),
+                    value: isPulsing
+                )
+                // Roughly the height of the balance it stands in for, so the hero
+                // doesn't jump when the first fetch lands.
+                .frame(height: 56)
+
+            Text("Loading…")
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundColor(.secondary)
+        }
+        .onAppear { isPulsing = true }
+    }
+}
+
 // MARK: - Sparkline
 
-/// A minimal line chart of recent balances: no axes, no fill, no labels.
-/// Points are spaced evenly by index rather than by timestamp, which keeps the
-/// shape readable when fetches are irregular (wake-ups, manual refreshes).
+/// A minimal line chart of recent balances: no axes, no labels, no grid. The stroke
+/// takes the balance's color so the trend reads as part of the number above it, with a
+/// faint fade underneath for weight and a dot marking the latest point.
+///
+/// Points are spaced evenly by index rather than by timestamp, which keeps the shape
+/// readable when fetches are irregular (wake-ups, manual refreshes).
 struct Sparkline: View {
     let values: [Int]
+    var color: Color = .secondary
 
-    /// Keeps the stroke from being clipped at the top and bottom edges.
-    private let verticalInset: CGFloat = 2
+    /// Keeps the stroke and the dot from being clipped at the edges.
+    private let verticalInset: CGFloat = 3
+    private let dotRadius: CGFloat = 2.5
 
     var body: some View {
         GeometryReader { geometry in
-            Path { path in
-                guard values.count >= 2 else { return }
+            let points = points(in: geometry.size)
 
-                let size = geometry.size
-                let minValue = values.min() ?? 0
-                let maxValue = values.max() ?? 0
-                let range = Double(maxValue - minValue)
+            if points.count >= 2 {
+                ZStack {
+                    fill(under: points, height: geometry.size.height)
+                        .fill(
+                            LinearGradient(
+                                colors: [color.opacity(0.18), color.opacity(0)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
 
-                let stepX = size.width / CGFloat(values.count - 1)
-                let usableHeight = max(size.height - verticalInset * 2, 1)
+                    line(through: points)
+                        .stroke(
+                            color.opacity(0.9),
+                            style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round)
+                        )
 
-                for (index, value) in values.enumerated() {
-                    // A flat series has no range to normalize against; center it.
-                    let normalized = range == 0 ? 0.5 : Double(value - minValue) / range
-                    let point = CGPoint(
-                        x: CGFloat(index) * stepX,
-                        y: verticalInset + (1 - CGFloat(normalized)) * usableHeight
-                    )
-                    if index == 0 {
-                        path.move(to: point)
-                    } else {
-                        path.addLine(to: point)
+                    if let last = points.last {
+                        Circle()
+                            .fill(color)
+                            .frame(width: dotRadius * 2, height: dotRadius * 2)
+                            .position(last)
                     }
                 }
             }
-            .stroke(
-                Color.secondary.opacity(0.5),
-                style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round)
+        }
+    }
+
+    /// Normalizes the values into the available space, oldest at the left.
+    private func points(in size: CGSize) -> [CGPoint] {
+        guard values.count >= 2 else { return [] }
+
+        let minValue = values.min() ?? 0
+        let maxValue = values.max() ?? 0
+        let range = Double(maxValue - minValue)
+
+        // The dot is centered on the last point, so the line stops a radius short of
+        // the trailing edge rather than letting the dot spill outside the frame.
+        let usableWidth = max(size.width - dotRadius, 1)
+        let usableHeight = max(size.height - verticalInset * 2, 1)
+        let stepX = usableWidth / CGFloat(values.count - 1)
+
+        return values.enumerated().map { index, value in
+            // A flat series has no range to normalize against; center it.
+            let normalized = range == 0 ? 0.5 : Double(value - minValue) / range
+            return CGPoint(
+                x: CGFloat(index) * stepX,
+                y: verticalInset + (1 - CGFloat(normalized)) * usableHeight
             )
+        }
+    }
+
+    private func line(through points: [CGPoint]) -> Path {
+        Path { path in
+            guard let first = points.first else { return }
+            path.move(to: first)
+            for point in points.dropFirst() {
+                path.addLine(to: point)
+            }
+        }
+    }
+
+    /// The line closed down to the baseline, so it can be filled.
+    private func fill(under points: [CGPoint], height: CGFloat) -> Path {
+        Path { path in
+            guard let first = points.first, let last = points.last else { return }
+            path.move(to: CGPoint(x: first.x, y: height))
+            path.addLine(to: first)
+            for point in points.dropFirst() {
+                path.addLine(to: point)
+            }
+            path.addLine(to: CGPoint(x: last.x, y: height))
+            path.closeSubpath()
         }
     }
 }
