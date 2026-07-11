@@ -41,7 +41,6 @@ struct BalanceResponse: Decodable, Equatable {
 enum CreditsError: LocalizedError, Equatable {
     case noAPIKey
     case invalidAPIKey
-    case invalidURL
     case requestFailed(String)
     case decodingFailed(String)
 
@@ -51,8 +50,6 @@ enum CreditsError: LocalizedError, Equatable {
             return "No API key set. Enter your Hyper API key in settings."
         case .invalidAPIKey:
             return "Invalid API key. Check your key at hyper.charm.land"
-        case .invalidURL:
-            return "The server URL is invalid."
         case .requestFailed(let message):
             return "Request failed: \(message)"
         case .decodingFailed(let message):

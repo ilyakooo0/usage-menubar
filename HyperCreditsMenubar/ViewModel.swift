@@ -237,6 +237,9 @@ final class ViewModel: ObservableObject {
         }
 
         refreshTask = Task { @MainActor in
+            // Check cancellation before setting isLoading — a previous
+            // refresh() may have cancelled us and already set isLoading = false.
+            guard !Task.isCancelled else { return }
             isLoading = true
             // Don't clear errorMessage here — keep showing the last error
             // until we have a successful result.
@@ -321,7 +324,11 @@ final class ViewModel: ObservableObject {
     func saveAPIKey() {
         let key = apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
         if key.isEmpty {
-            KeychainHelper.delete()
+            let deleted = KeychainHelper.delete()
+            guard deleted else {
+                errorMessage = "Could not delete API key from Keychain. It may be locked."
+                return
+            }
             // refresh() with an empty key clears balance, error, history, and
             // cancels any in-flight task from the previous key.
             refresh()
