@@ -27,9 +27,9 @@ struct MenuView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            hero
+            hyper
             if showsClaude {
-                hairline
+                serviceBreak
                 claude
             }
             hairline
@@ -59,7 +59,35 @@ struct MenuView: View {
         Divider().opacity(0.3)
     }
 
-    // MARK: - Hero
+    /// The rule between the two services. Wider than the others on purpose: Hyper and
+    /// Claude are two unrelated accounts, and the gap should say so before the headers do.
+    private var serviceBreak: some View {
+        hairline.padding(.vertical, 5)
+    }
+
+    /// A section header: an icon and a title, sized to match the "API Key" header below
+    /// so the popover reads as three sections rather than a hero with two appendices.
+    /// The icon is what tells the two services apart at a glance.
+    private func sectionHeader(_ title: String, systemImage: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: systemImage)
+                .font(.system(size: 11, weight: .semibold))
+
+            Text(title)
+                .font(Self.sectionFont)
+        }
+    }
+
+    // MARK: - Hyper
+
+    /// The Hyper section: its header, then the balance as the popover's hero.
+    private var hyper: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionHeader("Hyper Credits", systemImage: "bolt.fill")
+
+            hero
+        }
+    }
 
     private var hero: some View {
         VStack(spacing: 8) {
@@ -68,10 +96,6 @@ struct MenuView: View {
                     .transition(.opacity)
             } else if viewModel.balance == nil {
                 VStack(spacing: 6) {
-                    Text("Hyper Credits")
-                        .font(Self.sectionFont)
-                        .foregroundColor(.secondary)
-
                     Text("⚡?")
                         .font(Self.heroFont)
                         .foregroundColor(.secondary)
@@ -83,9 +107,6 @@ struct MenuView: View {
                 .transition(.opacity)
             } else {
                 VStack(spacing: 6) {
-                    Text("Hyper Credits")
-                        .font(Self.sectionFont)
-                        .foregroundColor(.secondary)
                     balanceNumber
                     caption
                     sparkline
@@ -204,8 +225,7 @@ struct MenuView: View {
     private var claude: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                Text("Claude Code")
-                    .font(Self.sectionFont)
+                sectionHeader("Claude Code", systemImage: "sparkles")
 
                 Spacer(minLength: 0)
 
@@ -228,7 +248,7 @@ struct MenuView: View {
 
     private func usageDetail(_ usage: ClaudeUsage) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            if let headline = Self.headline(for: usage) {
+            if let headline = ViewModel.claudeHeadline(for: usage) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text("\(headline.percent)%")
                         .font(Self.subheroFont)
@@ -281,18 +301,6 @@ struct MenuView: View {
 
             UsageBar(percent: percent, color: Self.usageColor(percent))
         }
-    }
-
-    /// The number the section leads with: whichever limit the server flags as binding,
-    /// falling back to the 5-hour window when it flags none.
-    private static func headline(for usage: ClaudeUsage) -> (percent: Int, resetsIn: String?)? {
-        if let active = usage.activeLimit {
-            return (active.percent, active.resetsInFormatted)
-        }
-        if let fiveHour = usage.fiveHour {
-            return (Int(fiveHour.utilization.rounded()), fiveHour.resetsInFormatted)
-        }
-        return nil
     }
 
     /// The balance colors read the other way round here, because for a limit more is

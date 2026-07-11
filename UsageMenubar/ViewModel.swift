@@ -186,25 +186,36 @@ final class ViewModel: ObservableObject {
         balanceFormatter.string(from: NSNumber(value: value)) ?? "\(value)"
     }
 
-    /// The text to show in the menu bar: `⚡…` while loading, `⚡?` when no balance, `⚡{balance}` otherwise.
+    /// The text to show in the menu bar: `⚡{balance} · {percent}%` with both services,
+    /// and just the half that is there when only one of them is — an unconfigured or
+    /// failing service drops out of the title rather than taking a slot to say nothing.
+    /// With neither, the bolt stands in alone: `⚡…` while the first fetch is in flight,
+    /// `⚡?` once it has come back empty-handed.
     ///
-    /// Takes the balance and loading flag as parameters rather than reading the
-    /// properties: `@Published` publishes in `willSet`, so a Combine subscriber that
-    /// called back into the view model would see the *pre-change* value and render a
-    /// title one update behind.
-    static func statusBarText(balance: Int?, isLoading: Bool) -> String {
-        if isLoading && balance == nil {
-            return "⚡…"
-        }
+    /// Takes its values as parameters rather than reading the properties: `@Published`
+    /// publishes in `willSet`, so a Combine subscriber that called back into the view
+    /// model would see the *pre-change* value and render a title one update behind.
+    static func statusBarText(balance: Int?, isLoading: Bool, claudePercent: Int?) -> String {
+        var parts: [String] = []
         if let balance = balance {
-            return "⚡\(formatBalance(balance))"
+            parts.append("⚡\(formatBalance(balance))")
         }
-        return "⚡?"
+        if let claudePercent = claudePercent {
+            parts.append("\(claudePercent)%")
+        }
+        if parts.isEmpty {
+            return isLoading ? "⚡…" : "⚡?"
+        }
+        return parts.joined(separator: " · ")
     }
 
     /// The text to show in the menu bar for the current state.
     var statusBarItemText: String {
-        Self.statusBarText(balance: balance, isLoading: isLoading)
+        Self.statusBarText(
+            balance: balance,
+            isLoading: isLoading,
+            claudePercent: claudeStatusBarPercent
+        )
     }
 
     /// The formatted balance string for display in the popover.
@@ -380,6 +391,29 @@ final class ViewModel: ObservableObject {
             // went wrong, rather than blanking the section on a transient failure.
             claudeError = message
         }
+    }
+
+    /// The number Claude gets judged by: whichever limit the server itself flags as
+    /// binding, falling back to the 5-hour window when it flags none. `nil` when there
+    /// is no usage to summarize.
+    ///
+    /// Shared by the popover and the menu bar title so the two can never disagree about
+    /// which of the windows is the one that matters.
+    static func claudeHeadline(for usage: ClaudeUsage?) -> (percent: Int, resetsIn: String?)? {
+        guard let usage = usage else { return nil }
+        if let active = usage.activeLimit {
+            return (active.percent, active.resetsInFormatted)
+        }
+        if let fiveHour = usage.fiveHour {
+            return (Int(fiveHour.utilization.rounded()), fiveHour.resetsInFormatted)
+        }
+        return nil
+    }
+
+    /// The Claude percentage for the menu bar title, or `nil` when Claude Code isn't
+    /// signed in on this machine — in which case the title is Hyper's alone.
+    var claudeStatusBarPercent: Int? {
+        Self.claudeHeadline(for: claudeUsage)?.percent
     }
 
     /// Display label for the Claude plan, e.g. "Pro" or "Max".

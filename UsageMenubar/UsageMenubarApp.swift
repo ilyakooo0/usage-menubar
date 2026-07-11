@@ -46,8 +46,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         popover.behavior = .transient
         popover.contentViewController = NSHostingController(rootView: MenuView(viewModel: viewModel))
 
-        // Observe published changes (balance + isLoading) to update the menu bar title.
-        // CombineLatest fires when either published property changes.
+        // Observe published changes (balance + isLoading + Claude usage) to update the
+        // menu bar title. CombineLatest fires when any of them changes.
         //
         // The title is built from the values the publisher hands us, not by reading the
         // view model back: `@Published` emits in `willSet`, so the property still holds
@@ -56,15 +56,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Delivery is hopped through `DispatchQueue.main` rather than `RunLoop.main`,
         // whose Combine scheduler only runs in the default run loop mode — the title
         // would freeze while a menu or a scroll was tracking.
-        statusTextCancellable = Publishers.CombineLatest(viewModel.$balance, viewModel.$isLoading)
-            .map { balance, isLoading in
-                ViewModel.statusBarText(balance: balance, isLoading: isLoading)
-            }
-            .removeDuplicates()
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] text in
-                self?.statusItem.button?.title = text
-            }
+        statusTextCancellable = Publishers.CombineLatest3(
+            viewModel.$balance,
+            viewModel.$isLoading,
+            viewModel.$claudeUsage
+        )
+        .map { balance, isLoading, claudeUsage in
+            ViewModel.statusBarText(
+                balance: balance,
+                isLoading: isLoading,
+                claudePercent: ViewModel.claudeHeadline(for: claudeUsage)?.percent
+            )
+        }
+        .removeDuplicates()
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self] text in
+            self?.statusItem.button?.title = text
+        }
 
         // Register for sleep/wake notifications
         registerSleepWakeNotifications()
