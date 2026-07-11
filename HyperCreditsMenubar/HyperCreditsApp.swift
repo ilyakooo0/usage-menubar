@@ -168,7 +168,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showContextMenu() {
         if popover.isShown {
-            closePopover()
+            popover.performClose(nil)
         }
 
         let menu = NSMenu()
@@ -209,18 +209,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Popover
 
+    /// Shows the popover if it isn't already visible.
+    ///
+    /// We don't toggle: the popover has `.transient` behavior, which closes it
+    /// automatically when the user clicks outside it — including on the status
+    /// item. By the time our `.leftMouseUp` action fires, a previously-shown
+    /// popover has already closed, so `isShown` is `false` and a toggle would
+    /// reopen it instead of dismissing it. Always showing means the first click
+    /// opens and `.transient` handles the rest.
     private func togglePopover() {
         guard let button = statusItem.button else { return }
-        if popover.isShown {
-            closePopover()
-        } else {
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            NSApp.activate(ignoringOtherApps: true)
-        }
-    }
-
-    private func closePopover() {
-        popover.performClose(nil)
+        guard !popover.isShown else { return }
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        NSApp.activate(ignoringOtherApps: true)
     }
 }
 
