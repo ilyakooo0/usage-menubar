@@ -4,6 +4,11 @@ import UserNotifications
 
 /// Main app delegate that manages the menu bar item, the refresh timer,
 /// the SwiftUI popover hosting `MenuView`, and sleep/wake handling.
+///
+/// Marked `@MainActor` because `ViewModel` is `@MainActor`-isolated and the
+/// delegate accesses it directly. All `NSApplicationDelegate` methods are
+/// called on the main thread regardless, so this is semantically correct.
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
@@ -96,7 +101,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let interval = TimeInterval(minutes * 60)
 
         let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
-            self?.viewModel.refresh()
+            Task { @MainActor in self?.viewModel.refresh() }
         }
         RunLoop.main.add(timer, forMode: .common)
         refreshTimer = timer
