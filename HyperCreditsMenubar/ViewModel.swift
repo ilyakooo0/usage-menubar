@@ -116,6 +116,9 @@ final class ViewModel: ObservableObject {
     /// instead of the first click's reset firing early.
     private var copiedResetTask: Task<Void, Never>?
 
+    /// Resets `savedConfirmation`; same rationale as `copiedResetTask`.
+    private var savedResetTask: Task<Void, Never>?
+
     // MARK: - History Configuration
 
     /// 24 hours at the shortest (1 minute) interval would overflow this, so the
@@ -140,6 +143,13 @@ final class ViewModel: ObservableObject {
     private static let balanceFormatter: NumberFormatter = {
         let formatter = NumberFormatter()
         formatter.numberStyle = .decimal
+        return formatter
+    }()
+
+    /// Cached relative time formatter for "Updated Xm ago" text.
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
         return formatter
     }()
 
@@ -176,9 +186,7 @@ final class ViewModel: ObservableObject {
     /// Relative time string for the last successful update, or nil if never updated.
     var lastUpdatedText: String? {
         guard let lastUpdated = lastUpdated else { return nil }
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .short
-        return "Updated \(formatter.localizedString(for: lastUpdated, relativeTo: Date()))"
+        return "Updated \(Self.relativeFormatter.localizedString(for: lastUpdated, relativeTo: Date()))"
     }
 
     // MARK: - History
@@ -216,15 +224,17 @@ final class ViewModel: ObservableObject {
     /// Refreshes the balance from the API. No-op if no API key is set.
     /// Cancels any previously in-flight refresh to prevent races.
     func refresh() {
+        refreshTask?.cancel()
+
         let key = apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else {
             balance = nil
             errorMessage = nil
             lastUpdated = nil
+            history.removeAll()
+            isLoading = false
             return
         }
-
-        refreshTask?.cancel()
 
         refreshTask = Task { @MainActor in
             isLoading = true
@@ -312,22 +322,29 @@ final class ViewModel: ObservableObject {
         let key = apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
         if key.isEmpty {
             KeychainHelper.delete()
-            balance = nil
-            errorMessage = nil
-            lastUpdated = nil
+            // refresh() with an empty key clears balance, error, history, and
+            // cancels any in-flight task from the previous key.
+            refresh()
         } else {
             let saved = KeychainHelper.save(key)
             guard saved else {
                 errorMessage = "Could not save API key to Keychain. It may be locked."
                 return
             }
+            // Clear history from any previous key so the sparkline and trend
+            // don't mix data from different accounts.
+            history.removeAll()
             refresh()
         }
 
-        // Show "✓ Saved" confirmation, auto-reset after 2 seconds
+        // Show "✓ Saved" confirmation, auto-reset after 2 seconds.
+        // Cancel any previous reset so rapid Save clicks don't hide the
+        // confirmation prematurely.
         savedConfirmation = true
-        Task { @MainActor in
+        savedResetTask?.cancel()
+        savedResetTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard !Task.isCancelled else { return }
             savedConfirmation = false
         }
     }

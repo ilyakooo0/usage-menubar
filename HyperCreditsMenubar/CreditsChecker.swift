@@ -26,7 +26,7 @@ struct BalanceResponse: Decodable, Equatable {
         }
 
         let fractional = try container.decode(Double.self, forKey: .balance)
-        guard let rounded = Int(exactly: fractional.rounded()) else {
+        guard let rounded = Int(exactly: fractional.rounded(.toNearestOrAwayFromZero)) else {
             throw DecodingError.dataCorruptedError(
                 forKey: .balance,
                 in: container,
