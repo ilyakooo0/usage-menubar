@@ -48,4 +48,66 @@ final class CreditsCheckerTests: XCTestCase {
             XCTFail("Unexpected error: \(error)")
         }
     }
+
+    // MARK: - CreditsError cases
+
+    func testInvalidAPIKeyErrorDescription() {
+        XCTAssertEqual(
+            CreditsError.invalidAPIKey.errorDescription,
+            "Invalid API key. Check your key at hyper.charm.land"
+        )
+    }
+
+    func testInvalidAPIKeyIsEquatable() {
+        XCTAssertEqual(CreditsError.invalidAPIKey, .invalidAPIKey)
+        XCTAssertNotEqual(CreditsError.invalidAPIKey, .noAPIKey)
+    }
+
+    // MARK: - CreditsChecking protocol
+
+    func testCreditsCheckerConformsToProtocol() {
+        let checker: CreditsChecking = CreditsChecker()
+        // If this compiles, CreditsChecker conforms to CreditsChecking.
+        XCTAssertNotNil(checker)
+    }
+
+    // MARK: - Mock CreditsChecker for ViewModel tests
+
+    func testMockCreditsCheckerReturnsBalance() async throws {
+        let mock = MockCreditsChecker(balanceToReturn: 42)
+        let result = try await mock.fetchBalance(apiKey: "sk-test")
+        XCTAssertEqual(result, 42)
+    }
+
+    func testMockCreditsCheckerThrowsError() async {
+        let mock = MockCreditsChecker(errorToThrow: CreditsError.invalidAPIKey)
+        do {
+            _ = try await mock.fetchBalance(apiKey: "sk-test")
+            XCTFail("Expected invalidAPIKey error")
+        } catch CreditsError.invalidAPIKey {
+            // expected
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+}
+
+// MARK: - Mock CreditsChecker
+
+/// A mock `CreditsChecking` implementation for testing the ViewModel.
+final class MockCreditsChecker: CreditsChecking {
+    var balanceToReturn: Int?
+    var errorToThrow: Error?
+
+    init(balanceToReturn: Int? = nil, errorToThrow: Error? = nil) {
+        self.balanceToReturn = balanceToReturn
+        self.errorToThrow = errorToThrow
+    }
+
+    func fetchBalance(apiKey: String) async throws -> Int {
+        if let errorToThrow {
+            throw errorToThrow
+        }
+        return balanceToReturn ?? 0
+    }
 }

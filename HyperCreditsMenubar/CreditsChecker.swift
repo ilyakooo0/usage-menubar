@@ -8,6 +8,7 @@ struct BalanceResponse: Decodable, Equatable {
 /// Errors that can occur while fetching the balance.
 enum CreditsError: LocalizedError, Equatable {
     case noAPIKey
+    case invalidAPIKey
     case invalidURL
     case requestFailed(String)
     case decodingFailed(String)
@@ -16,6 +17,8 @@ enum CreditsError: LocalizedError, Equatable {
         switch self {
         case .noAPIKey:
             return "No API key set. Enter your Hyper API key in settings."
+        case .invalidAPIKey:
+            return "Invalid API key. Check your key at hyper.charm.land"
         case .invalidURL:
             return "The server URL is invalid."
         case .requestFailed(let message):
@@ -26,18 +29,30 @@ enum CreditsError: LocalizedError, Equatable {
     }
 }
 
+/// Protocol abstraction for fetching credit balance, enabling test injection.
+protocol CreditsChecking {
+    func fetchBalance(apiKey: String) async throws -> Int
+}
+
 /// Client for the Hyper (Charm) credits API.
-final class CreditsChecker {
+final class CreditsChecker: CreditsChecking {
     static let endpoint = URL(string: "https://hyper.charm.land/v1/credits")!
 
     private let session: URLSession
 
-    init(session: URLSession = .shared) {
-        self.session = session
+    init(session: URLSession? = nil) {
+        if let session {
+            self.session = session
+        } else {
+            let config = URLSessionConfiguration.default
+            config.timeoutIntervalForRequest = 10
+            config.timeoutIntervalForResource = 15
+            self.session = URLSession(configuration: config)
+        }
     }
 
     /// Fetches the current credit balance for the given API key.
-    /// - Parameter apiKey: The Hyper API key (starts with `"sk-"`).
+    /// - Parameter apiKey: A Hyper API key (starts with `"sk-"`).
     /// - Returns: The balance as an integer.
     /// - Throws: `CreditsError` on failure.
     func fetchBalance(apiKey: String) async throws -> Int {
@@ -54,6 +69,9 @@ final class CreditsChecker {
                 throw CreditsError.requestFailed("Invalid response type")
             }
             guard (200...299).contains(httpResponse.statusCode) else {
+                if httpResponse.statusCode == 401 {
+                    throw CreditsError.invalidAPIKey
+                }
                 throw CreditsError.requestFailed("HTTP \(httpResponse.statusCode)")
             }
             do {

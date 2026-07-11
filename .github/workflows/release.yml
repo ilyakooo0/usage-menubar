@@ -34,13 +34,22 @@ jobs:
       - name: Install xcodegen
         run: brew install xcodegen
 
+      # ── Inject version into project.yml ───────────────────────────────
+      - name: Inject version into project.yml
+        run: |
+          sed -i '' "s/MARKETING_VERSION: \".*\"/MARKETING_VERSION: \"$VERSION\"/" project.yml
+          sed -i '' "s/CFBundleShortVersionString: \".*\"/CFBundleShortVersionString: \"$VERSION\"/" project.yml
+          sed -i '' "s/CURRENT_PROJECT_VERSION: \".*\"/CURRENT_PROJECT_VERSION: \"$VERSION\"/" project.yml
+          sed -i '' "s/CFBundleVersion: \".*\"/CFBundleVersion: \"$VERSION\"/" project.yml
+          echo "Updated project.yml with version $VERSION"
+          grep -E 'MARKETING_VERSION|CFBundleShortVersionString|CURRENT_PROJECT_VERSION|CFBundleVersion' project.yml
+
       # ── Generate Xcode project ────────────────────────────────────────
       - name: Generate Xcode project
         run: xcodegen generate
 
       # ── Run tests ─────────────────────────────────────────────────────
       - name: Run tests
-        continue-on-error: true
         run: |
           xcodebuild test \
             -scheme HyperCreditsMenubar \
@@ -49,8 +58,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            DEVELOPMENT_TEAM="" \
-            || true
+            DEVELOPMENT_TEAM=""
 
       # ── Archive ───────────────────────────────────────────────────────
       - name: Archive
@@ -64,8 +72,7 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             DEVELOPMENT_TEAM="" \
-            CODE_SIGN_ENTITLEMENTS="" \
-            ENABLE_HARDENED_RUNTIME=NO
+            CODE_SIGN_ENTITLEMENTS=""
 
       # ── Export .app from archive ──────────────────────────────────────
       - name: Export app from archive

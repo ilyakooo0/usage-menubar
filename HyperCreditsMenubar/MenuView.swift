@@ -2,10 +2,11 @@ import Foundation
 import SwiftUI
 import Combine
 import ServiceManagement
+import UserNotifications
 
 /// The view model that drives the menu bar display and the popover content.
 final class ViewModel: ObservableObject {
-    /// The last known balance. `nil` when loading, error, or no API key.
+    /// The last known balance. `nil` when there has never been a successful fetch.
     @Published var balance: Int?
 
     /// `true` while a network request is in flight.
@@ -17,41 +18,56 @@ final class ViewModel: ObservableObject {
     /// The API key entered by the user (loaded from Keychain on init).
     @Published var apiKeyInput: String = ""
 
+    /// Timestamp of the last successful balance fetch.
+    @Published var lastUpdated: Date?
+
+    /// Brief "✓ Saved" confirmation shown after saving the API key.
+    @Published var savedConfirmation: Bool = false
+
     /// Whether launch-at-login is enabled.
     @Published var launchAtLogin: Bool {
         didSet {
+            guard !isInitializingLaunchAtLogin else { return }
             updateLaunchAtLogin(launchAtLogin)
         }
     }
 
-    /// Timestamp of the last successful balance fetch, for relative "x ago" display.
-    @Published var lastUpdated: Date?
+    /// Flag to suppress the didSet during initial setup.
+    private var isInitializingLaunchAtLogin = true
 
-    /// Whether an API key is currently stored in the Keychain.
-    @Published var hasAPIKey: Bool
+    private let checker: CreditsChecking
 
-    private let checker = CreditsChecker()
-
-    init() {
-        let storedKey = KeychainHelper.load()
-        apiKeyInput = storedKey ?? ""
-        hasAPIKey = (storedKey ?? "").isEmpty == false
+    init(checker: CreditsChecking = CreditsChecker()) {
+        self.checker = checker
+        apiKeyInput = KeychainHelper.load() ?? ""
         launchAtLogin = SMAppService.mainApp.status == .enabled
+        isInitializingLaunchAtLogin = false
     }
 
     // MARK: - Balance
 
-    /// `true` when there is no stored API key and no balance yet (onboarding state).
-    var needsOnboarding: Bool {
-        !hasAPIKey && balance == nil && errorMessage == nil
+    /// Formats an integer with thousands grouping separator.
+    private func formatBalance(_ value: Int) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
     }
 
-    /// The text to show in the menu bar: `⚡{balance}` or `⚡?`.
+    /// The text to show in the menu bar: `⚡…` while loading, `⚡?` when no balance, `⚡{balance}` otherwise.
     var statusBarItemText: String {
+        if isLoading && balance == nil {
+            return "⚡…"
+        }
         if let balance = balance {
-            return "⚡\(balance)"
+            return "⚡\(formatBalance(balance))"
         }
         return "⚡?"
+    }
+
+    /// The formatted balance string for display in the popover.
+    var formattedBalance: String {
+        guard let balance = balance else { return "?" }
+        return formatBalance(balance)
     }
 
     /// The color for the balance display based on thresholds.
@@ -62,12 +78,12 @@ final class ViewModel: ObservableObject {
         return .red
     }
 
-    /// A human-readable relative time for the last update, e.g. "2m ago".
-    var relativeUpdateText: String? {
-        guard let lastUpdated else { return nil }
+    /// Relative time string for the last successful update, or nil if never updated.
+    var lastUpdatedText: String? {
+        guard let lastUpdated = lastUpdated else { return nil }
         let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: lastUpdated, relativeTo: Date())
+        formatter.unitsStyle = .short
+        return "Updated \(formatter.localizedString(for: lastUpdated, relativeTo: Date()))"
     }
 
     /// Refreshes the balance from the API. No-op if no API key is set.
@@ -82,17 +98,53 @@ final class ViewModel: ObservableObject {
 
         Task { @MainActor in
             isLoading = true
-            errorMessage = nil
+            // Don't clear errorMessage here — keep showing the last error
+            // until we have a successful result.
             do {
                 let result = try await checker.fetchBalance(apiKey: key)
+                // Check for low-balance threshold crossing before updating
+                let previousBalance = balance
                 balance = result
+                errorMessage = nil
                 lastUpdated = Date()
+                isLoading = false
+
+                // Low-balance notification: only on threshold crossing (≥10 → <10)
+                if let prev = previousBalance, prev >= 10, result < 10 {
+                    sendLowBalanceNotification(balance: result)
+                }
             } catch {
-                balance = nil
+                // Keep the stale balance value — don't wipe it on error.
+                // Only set balance = nil if there was never a successful fetch
+                // (it's already nil in that case, so nothing to do).
                 errorMessage = error.localizedDescription
-                lastUpdated = nil
+                isLoading = false
             }
-            isLoading = false
+        }
+    }
+
+    // MARK: - Low Balance Notification
+
+    private func sendLowBalanceNotification(balance: Int) {
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { settings in
+            guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else {
+                return
+            }
+            let content = UNMutableNotificationContent()
+            content.title = "Low Hyper Credits"
+            let formatter = NumberFormatter()
+            formatter.numberStyle = .decimal
+            let balanceStr = formatter.string(from: NSNumber(value: balance)) ?? "\(balance)"
+            content.body = "Low Hyper credits: \(balanceStr) remaining"
+            content.sound = .default
+
+            let request = UNNotificationRequest(
+                identifier: "low-balance-alert",
+                content: content,
+                trigger: nil
+            )
+            center.add(request)
         }
     }
 
@@ -103,14 +155,19 @@ final class ViewModel: ObservableObject {
         let key = apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
         if key.isEmpty {
             KeychainHelper.delete()
-            hasAPIKey = false
             balance = nil
             errorMessage = nil
             lastUpdated = nil
         } else {
             KeychainHelper.save(key)
-            hasAPIKey = true
             refresh()
+        }
+
+        // Show "✓ Saved" confirmation, auto-reset after 2 seconds
+        savedConfirmation = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            savedConfirmation = false
         }
     }
 
@@ -128,183 +185,102 @@ final class ViewModel: ObservableObject {
 // MARK: - MenuView
 
 /// The SwiftUI view shown inside the popover when the menu bar item is clicked.
-///
-/// Minimal, airy design: one big balance number as the hero, generous spacing,
-/// restrained color (balance color is the only accent), no cards or material
-/// backgrounds. Inspired by Apple's Battery widget and trading apps.
 struct MenuView: View {
     @ObservedObject var viewModel: ViewModel
 
     var body: some View {
-        VStack(spacing: 0) {
-            heroSection
-            statusRow
-            refreshButton
-
-            spacer
-
-            apiKeySection
-
-            spacer
-
-            footerRow
-            versionText
-        }
-        .padding(20)
-        .frame(width: 280)
-        .fixedSize(horizontal: false, vertical: true)
-        .background(Color(nsColor: .windowBackgroundColor))
-        .animation(.easeInOut(duration: 0.2), value: viewModel.balance)
-        .animation(.easeInOut(duration: 0.2), value: viewModel.errorMessage)
-        .animation(.easeInOut(duration: 0.2), value: viewModel.hasAPIKey)
-    }
-
-    /// A light vertical spacer between sections — spacing, not borders.
-    private var spacer: some View {
-        Spacer().frame(height: 16)
-    }
-
-    // MARK: - Hero
-
-    /// The balance number is the hero — big, bold, beautiful. Everything else
-    /// is secondary.
-    private var heroSection: some View {
-        VStack(spacing: 6) {
-            Group {
+        VStack(spacing: 16) {
+            // Balance display
+            VStack(spacing: 4) {
                 if viewModel.isLoading && viewModel.balance == nil {
                     ProgressView()
-                        .controlSize(.small)
-                } else if let balance = viewModel.balance {
-                    Text("\(balance)")
-                        .font(.system(size: 52, weight: .heavy, design: .rounded))
-                        .monospacedDigit()
+                        .scaleEffect(0.8)
+                    Text("Loading…")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else if viewModel.balance != nil {
+                    Text(viewModel.formattedBalance)
+                        .font(.system(size: 42, weight: .bold, design: .rounded))
                         .foregroundColor(viewModel.balanceColor)
-                        .contentTransition(.opacity)
-                } else if viewModel.needsOnboarding {
-                    Image(systemName: "bolt.fill")
-                        .font(.system(size: 40, weight: .regular))
-                        .symbolRenderingMode(.hierarchical)
-                        .foregroundStyle(.secondary)
+                    Text("credits")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 } else {
-                    Text("—")
-                        .font(.system(size: 52, weight: .heavy, design: .rounded))
+                    Text("?")
+                        .font(.system(size: 42, weight: .bold, design: .rounded))
+                        .foregroundColor(.secondary)
+                    Text("credits")
+                        .font(.caption)
                         .foregroundColor(.secondary)
                 }
             }
-            .frame(height: 56)
 
-            Text("credits")
-                .font(.system(size: 11, weight: .medium, design: .rounded))
-                .foregroundColor(.secondary)
-                .textCase(.uppercase)
-                .tracking(1.5)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.top, 4)
-    }
-
-    // MARK: - Status
-
-    /// Subtle "Updated 2m ago" or "Not connected" — plain text, no icons.
-    private var statusRow: some View {
-        Group {
-            if let relative = viewModel.relativeUpdateText {
-                Text("Updated \(relative)")
-            } else {
-                Text("Not connected")
-            }
-        }
-        .font(.system(size: 11, weight: .regular, design: .rounded))
-        .foregroundStyle(.tertiary)
-        .padding(.top, 2)
-    }
-
-    // MARK: - Refresh
-
-    /// Minimal text button — no icon rotation, just a text change.
-    private var refreshButton: some View {
-        Button(action: { viewModel.refresh() }) {
-            Text(viewModel.isLoading ? "Refreshing…" : "Refresh")
-                .font(.system(size: 12, weight: .medium, design: .rounded))
-                .foregroundColor(.secondary)
-        }
-        .buttonStyle(.plain)
-        .disabled(viewModel.isLoading)
-        .padding(.top, 6)
-    }
-
-    // MARK: - API Key
-
-    /// Clean SecureField + Save button. No DisclosureGroup, no lock icons.
-    private var apiKeySection: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 8) {
-                SecureField("Hyper API Key", text: $viewModel.apiKeyInput)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 13, design: .monospaced))
-                    .onSubmit { viewModel.saveAPIKey() }
-
-                Button(action: { viewModel.saveAPIKey() }) {
-                    Text("Save")
-                        .font(.system(size: 13, weight: .medium, design: .rounded))
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-            }
-
-            if viewModel.hasAPIKey {
-                Text("✓ Saved")
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
-                    .foregroundColor(.green)
-            } else if let url = URL(string: "https://hyper.charm.land") {
-                Button {
-                    NSWorkspace.shared.open(url)
-                } label: {
-                    Text("Get your key at hyper.charm.land")
-                        .font(.system(size: 11, weight: .regular, design: .rounded))
-                        .foregroundColor(.secondary)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
-    // MARK: - Footer
-
-    /// Launch at Login toggle on the left, Quit on the right. Very subtle.
-    private var footerRow: some View {
-        HStack {
-            Toggle("Launch at Login", isOn: $viewModel.launchAtLogin)
-                .toggleStyle(.switch)
-                .controlSize(.small)
-                .font(.system(size: 12, weight: .regular, design: .rounded))
-
-            Spacer()
-
-            Button {
-                NSApplication.shared.terminate(nil)
-            } label: {
-                Text("Quit")
-                    .font(.system(size: 12, weight: .regular, design: .rounded))
+            // Last updated time
+            if let lastUpdatedText = viewModel.lastUpdatedText {
+                Text(lastUpdatedText)
+                    .font(.caption2)
                     .foregroundColor(.secondary)
             }
-            .buttonStyle(.plain)
+
+            if let error = viewModel.errorMessage {
+                Text(error)
+                    .font(.caption)
+                    .foregroundColor(.red)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+            }
+
+            Divider()
+
+            // Refresh button
+            Button(action: { viewModel.refresh() }) {
+                Label("Refresh now", systemImage: "arrow.clockwise")
+            }
+            .disabled(viewModel.isLoading)
+
+            // API key section
+            VStack(alignment: .leading, spacing: 6) {
+                Text("API Key")
+                    .font(.headline)
+                HStack {
+                    SecureField("sk-...", text: $viewModel.apiKeyInput)
+                        .textFieldStyle(.roundedBorder)
+                    Button("Save") {
+                        viewModel.saveAPIKey()
+                    }
+                }
+                if viewModel.savedConfirmation {
+                    Text("✓ Saved")
+                        .font(.caption)
+                        .foregroundColor(.green)
+                        .transition(.opacity)
+                }
+            }
+
+            // Launch at login toggle
+            Toggle("Launch at Login", isOn: $viewModel.launchAtLogin)
+                .toggleStyle(.switch)
+
+            // Links
+            HStack {
+                if let url = URL(string: "https://hyper.charm.land") {
+                    Button("Open hyper.charm.land") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                Spacer()
+            }
+
+            Divider()
+
+            // Quit
+            Button("Quit HyperCredits") {
+                NSApplication.shared.terminate(nil)
+            }
             .keyboardShortcut("q")
         }
-    }
-
-    // MARK: - Version
-
-    /// Tiny version label at the very bottom.
-    private var versionText: some View {
-        Text("v\(appVersion)")
-            .font(.system(size: 10, weight: .regular, design: .rounded))
-            .foregroundStyle(.tertiary)
-            .padding(.top, 10)
-    }
-
-    /// Reads the marketing version from the main bundle.
-    private var appVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
+        .padding(16)
+        .frame(width: 280)
+        .animation(.easeInOut(duration: 0.2), value: viewModel.savedConfirmation)
     }
 }
