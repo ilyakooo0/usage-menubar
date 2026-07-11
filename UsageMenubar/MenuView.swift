@@ -66,8 +66,26 @@ struct MenuView: View {
             if viewModel.isLoading && viewModel.balance == nil {
                 PulsingBolt()
                     .transition(.opacity)
+            } else if viewModel.balance == nil {
+                VStack(spacing: 6) {
+                    Text("Hyper Credits")
+                        .font(Self.sectionFont)
+                        .foregroundColor(.secondary)
+
+                    Text("⚡?")
+                        .font(Self.heroFont)
+                        .foregroundColor(.secondary)
+
+                    Text("Enter your API key below")
+                        .font(Self.captionFont)
+                        .foregroundColor(.secondary)
+                }
+                .transition(.opacity)
             } else {
                 VStack(spacing: 6) {
+                    Text("Hyper Credits")
+                        .font(Self.sectionFont)
+                        .foregroundColor(.secondary)
                     balanceNumber
                     caption
                     sparkline

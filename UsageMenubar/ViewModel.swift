@@ -276,14 +276,15 @@ final class ViewModel: ObservableObject {
             errorMessage = nil
             lastUpdated = nil
             history.removeAll()
-            isLoading = false
         }
 
         refreshTask = Task { @MainActor in
             // Check cancellation before setting isLoading — a previous
             // refresh() may have cancelled us and already set isLoading = false.
             guard !Task.isCancelled else { return }
-            if !key.isEmpty { isLoading = true }
+            // Loading state covers both fetches: the popover's loading view depends
+            // on it, and Claude usage is fetched even when there's no Hyper key.
+            isLoading = true
             // Don't clear the errors here — keep showing the last one
             // until we have a successful result.
 
@@ -297,6 +298,7 @@ final class ViewModel: ObservableObject {
 
             applyBalance(balanceResult)
             applyClaude(claudeResult)
+            isLoading = false
         }
     }
 
@@ -338,8 +340,6 @@ final class ViewModel: ObservableObject {
             // (it's already nil in that case, so nothing to do).
             errorMessage = error.localizedDescription
         }
-
-        isLoading = false
     }
 
     // MARK: - Claude Usage
