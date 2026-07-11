@@ -63,8 +63,9 @@ targets:
         PRODUCT_NAME: HyperCreditsMenubar
         INFOPLIST_FILE: HyperCreditsMenubar/Info.plist
         # Grants the outgoing-network-connection entitlement needed to reach
-        # the Hyper API. Stripped in CI's archive step (unsigned builds can't
-        # carry entitlements).
+        # the Hyper and Claude APIs, and deliberately does not sandbox the app —
+        # see the comment in the entitlements file. Stripped in CI's archive step
+        # (unsigned builds can't carry entitlements).
         CODE_SIGN_ENTITLEMENTS: HyperCreditsMenubar/HyperCreditsMenubar.entitlements
         ENABLE_HARDENED_RUNTIME: YES
         MACOSX_DEPLOYMENT_TARGET: "14.0"

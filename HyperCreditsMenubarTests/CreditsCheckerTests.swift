@@ -509,6 +509,7 @@ final class StubURLProtocol: URLProtocol {
     private static var outcomes: [Outcome] = []
     private static var lastOutcome: Outcome?
     private static var requests: [URLRequest] = []
+    private static var bodies: [Data?] = []
 
     /// Queues the outcomes for successive requests. Once the queue is drained the final
     /// outcome repeats, so a persistent failure needs only one entry.
@@ -524,12 +525,22 @@ final class StubURLProtocol: URLProtocol {
         outcomes = []
         lastOutcome = nil
         requests = []
+        bodies = []
     }
 
     static var recordedRequests: [URLRequest] {
         lock.lock()
         defer { lock.unlock() }
         return requests
+    }
+
+    /// The recorded requests' bodies, in the same order. Captured here rather than read
+    /// from `URLRequest.httpBody` afterwards, because `URLSession` hands a protocol the
+    /// body as a stream — one that has to be drained while the request is being loaded.
+    static var recordedBodies: [Data?] {
+        lock.lock()
+        defer { lock.unlock() }
+        return bodies
     }
 
     static var requestCount: Int {
@@ -541,11 +552,29 @@ final class StubURLProtocol: URLProtocol {
         lock.lock()
         defer { lock.unlock() }
         requests.append(request)
+        bodies.append(drainBody(from: request))
 
         if !outcomes.isEmpty {
             lastOutcome = outcomes.removeFirst()
         }
         return lastOutcome ?? .failure(StubError.noOutcomeConfigured)
+    }
+
+    private static func drainBody(from request: URLRequest) -> Data? {
+        if let body = request.httpBody { return body }
+        guard let stream = request.httpBodyStream else { return nil }
+
+        stream.open()
+        defer { stream.close() }
+
+        var body = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+            let read = stream.read(&buffer, maxLength: buffer.count)
+            guard read > 0 else { break }
+            body.append(buffer, count: read)
+        }
+        return body
     }
 
     override class func canInit(with request: URLRequest) -> Bool { true }

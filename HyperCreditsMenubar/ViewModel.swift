@@ -62,11 +62,23 @@ final class ViewModel: ObservableObject {
     /// The last known balance. `nil` when there has never been a successful fetch.
     @Published var balance: Int?
 
-    /// `true` while a network request is in flight.
+    /// `true` while a balance request is in flight.
     @Published var isLoading = false
 
     /// A human-readable error message, shown when the balance can't be fetched.
     @Published var errorMessage: String?
+
+    /// Claude Code's subscription usage. `nil` when Claude Code has never signed in on
+    /// this machine, in which case the popover leaves the section out entirely rather
+    /// than nagging someone who doesn't use it.
+    @Published var claudeUsage: ClaudeUsage?
+
+    /// A human-readable error message from the Claude fetch. Independent of
+    /// `errorMessage`: the two services fail separately.
+    @Published var claudeError: String?
+
+    /// The Claude plan the credentials belong to — `"pro"`, `"max"`, …
+    @Published var claudePlan: String?
 
     /// The API key draft bound to the text field. Two-way bound to the `SecureField`,
     /// so it changes on every keystroke — never fetch with it, use `activeAPIKey`.
@@ -114,6 +126,7 @@ final class ViewModel: ObservableObject {
     private var activeAPIKey: String
 
     private let checker: CreditsChecking
+    private let claudeChecker: ClaudeUsageChecking
     private let defaults: UserDefaults
 
     /// The currently in-flight refresh task, if any. Used to cancel
@@ -134,8 +147,13 @@ final class ViewModel: ObservableObject {
     private static let maxHistoryEntries = 300
     private static let historyWindow: TimeInterval = 24 * 60 * 60
 
-    init(checker: CreditsChecking = CreditsChecker(), defaults: UserDefaults = .standard) {
+    init(
+        checker: CreditsChecking = CreditsChecker(),
+        claudeChecker: ClaudeUsageChecking = ClaudeUsageClient(),
+        defaults: UserDefaults = .standard
+    ) {
         self.checker = checker
+        self.claudeChecker = claudeChecker
         self.defaults = defaults
         let storedKey = KeychainHelper.load() ?? ""
         apiKeyInput = storedKey
@@ -241,58 +259,141 @@ final class ViewModel: ObservableObject {
 
     // MARK: - Refresh
 
-    /// Refreshes the balance from the API. No-op if no API key is set.
-    /// Cancels any previously in-flight refresh to prevent races.
+    /// Refreshes the Hyper balance and the Claude usage, both at once.
+    ///
+    /// The two are independent: either can fail, or not be configured at all, without
+    /// touching the other. Cancels any previously in-flight refresh to prevent races.
     func refresh() {
         refreshTask?.cancel()
 
         // Deliberately the saved key rather than `apiKeyInput`: see `activeAPIKey`.
         let key = activeAPIKey
-        guard !key.isEmpty else {
-            refreshTask = nil
+        if key.isEmpty {
+            // Nothing to fetch, and nothing worth keeping: the balance, its history and
+            // any error all belonged to a key that is no longer there. Claude is left
+            // alone — it doesn't depend on the Hyper key.
             balance = nil
             errorMessage = nil
             lastUpdated = nil
             history.removeAll()
             isLoading = false
-            return
         }
 
         refreshTask = Task { @MainActor in
             // Check cancellation before setting isLoading — a previous
             // refresh() may have cancelled us and already set isLoading = false.
             guard !Task.isCancelled else { return }
-            isLoading = true
-            // Don't clear errorMessage here — keep showing the last error
+            if !key.isEmpty { isLoading = true }
+            // Don't clear the errors here — keep showing the last one
             // until we have a successful result.
-            do {
-                let result = try await checker.fetchBalance(apiKey: key)
-                // Check for cancellation after the await
-                guard !Task.isCancelled else { return }
-                // Check for low-balance threshold crossing before updating
-                let previousBalance = balance
-                balance = result
-                errorMessage = nil
-                let now = Date()
-                lastUpdated = now
-                recordHistory(balance: result, at: now)
-                isLoading = false
 
-                // Low-balance notification: on threshold crossing (≥10 → <10)
-                // OR on first successful fetch if already below threshold.
-                if let prev = previousBalance, prev >= 10, result < 10 {
-                    sendLowBalanceNotification(balance: result)
-                } else if previousBalance == nil && result < 10 {
-                    sendLowBalanceNotification(balance: result)
-                }
-            } catch {
-                // Keep the stale balance value — don't wipe it on error.
-                // Only set balance = nil if there was never a successful fetch
-                // (it's already nil in that case, so nothing to do).
-                guard !Task.isCancelled else { return }
-                errorMessage = error.localizedDescription
-                isLoading = false
+            // Both requests go out at once; neither waits on the other.
+            async let balanceOutcome = fetchBalance(key: key)
+            async let claudeOutcome = fetchClaudeUsage()
+
+            let balanceResult = await balanceOutcome
+            let claudeResult = await claudeOutcome
+            guard !Task.isCancelled else { return }
+
+            applyBalance(balanceResult)
+            applyClaude(claudeResult)
+        }
+    }
+
+    /// The balance fetch, or `nil` when there is no key to fetch with.
+    private func fetchBalance(key: String) async -> Result<Int, Error>? {
+        guard !key.isEmpty else { return nil }
+        do {
+            return .success(try await checker.fetchBalance(apiKey: key))
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    private func applyBalance(_ result: Result<Int, Error>?) {
+        guard let result else { return }
+
+        switch result {
+        case .success(let newBalance):
+            // Capture the previous balance before overwriting it: the low-balance
+            // notification fires on the crossing, not on the value.
+            let previousBalance = balance
+            balance = newBalance
+            errorMessage = nil
+            let now = Date()
+            lastUpdated = now
+            recordHistory(balance: newBalance, at: now)
+
+            // Low-balance notification: on threshold crossing (≥10 → <10)
+            // OR on first successful fetch if already below threshold.
+            if let previous = previousBalance, previous >= 10, newBalance < 10 {
+                sendLowBalanceNotification(balance: newBalance)
+            } else if previousBalance == nil && newBalance < 10 {
+                sendLowBalanceNotification(balance: newBalance)
             }
+
+        case .failure(let error):
+            // Keep the stale balance value — don't wipe it on error.
+            // Only set balance = nil if there was never a successful fetch
+            // (it's already nil in that case, so nothing to do).
+            errorMessage = error.localizedDescription
+        }
+
+        isLoading = false
+    }
+
+    // MARK: - Claude Usage
+
+    /// What a Claude fetch produced. Missing credentials is deliberately not a failure:
+    /// plenty of people don't use Claude Code, and an error telling them so would be
+    /// noise rather than news.
+    private enum ClaudeOutcome {
+        case notConfigured
+        case usage(ClaudeUsageReport)
+        case failure(String)
+    }
+
+    private func fetchClaudeUsage() async -> ClaudeOutcome {
+        do {
+            return .usage(try await claudeChecker.fetchUsage())
+        } catch ClaudeUsageError.noCredentials {
+            return .notConfigured
+        } catch {
+            return .failure(error.localizedDescription)
+        }
+    }
+
+    private func applyClaude(_ outcome: ClaudeOutcome) {
+        switch outcome {
+        case .notConfigured:
+            claudeUsage = nil
+            claudePlan = nil
+            claudeError = nil
+
+        case .usage(let report):
+            claudeUsage = report.usage
+            claudePlan = report.subscriptionType
+            claudeError = nil
+
+        case .failure(let message):
+            // As with the balance: keep the last good numbers on screen and say what
+            // went wrong, rather than blanking the section on a transient failure.
+            claudeError = message
+        }
+    }
+
+    /// Display label for the Claude plan, e.g. "Pro" or "Max".
+    var claudePlanLabel: String? {
+        guard let plan = claudePlan?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !plan.isEmpty else { return nil }
+
+        switch plan.lowercased() {
+        case "free": return "Free"
+        case "pro": return "Pro"
+        case "max": return "Max"
+        case "team": return "Team"
+        case "enterprise": return "Enterprise"
+        default: return plan.capitalized
         }
     }
 

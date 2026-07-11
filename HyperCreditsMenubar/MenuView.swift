@@ -11,10 +11,14 @@ struct MenuView: View {
 
     // MARK: - Type Scale
 
-    /// One rounded family at four sizes. The balance is the only large element and
-    /// everything else steps down from it, so nothing competes with it for attention.
-    /// Monospaced digits keep the balance from jittering as its digits change.
+    /// One rounded family, sized so that the balance is the only large element and
+    /// everything else steps down from it — nothing competes with it for attention.
+    /// The Claude percentage is the one exception, and it is deliberately set well
+    /// below the balance so it reads as the second thing on the page, not the first.
+    /// Monospaced digits keep numbers from jittering as their digits change.
     private static let heroFont = Font.system(size: 46, weight: .semibold, design: .rounded)
+        .monospacedDigit()
+    private static let subheroFont = Font.system(size: 26, weight: .semibold, design: .rounded)
         .monospacedDigit()
     private static let sectionFont = Font.system(size: 12, weight: .semibold, design: .rounded)
     private static let controlFont = Font.system(size: 12, weight: .regular, design: .rounded)
@@ -24,6 +28,10 @@ struct MenuView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             hero
+            if showsClaude {
+                hairline
+                claude
+            }
             hairline
             settings
             hairline
@@ -42,6 +50,8 @@ struct MenuView: View {
         .animation(.easeInOut(duration: 0.25), value: viewModel.balance)
         .animation(.easeInOut(duration: 0.25), value: viewModel.isLoading)
         .animation(.easeInOut(duration: 0.3), value: historyValues.count)
+        .animation(.easeInOut(duration: 0.25), value: viewModel.claudeUsage)
+        .animation(.easeInOut(duration: 0.2), value: viewModel.claudeError)
     }
 
     /// A section rule light enough to read as a pause rather than a border.
@@ -160,6 +170,121 @@ struct MenuView: View {
         .padding(.top, 2)
     }
 
+    // MARK: - Claude
+
+    /// Whether there is anything to say about Claude. Nothing at all when Claude Code
+    /// isn't signed in on this machine — the section doesn't appear, and no error is
+    /// shown for a service the user may simply not use.
+    private var showsClaude: Bool {
+        if viewModel.claudeError != nil { return true }
+        if let usage = viewModel.claudeUsage { return !usage.isEmpty }
+        return false
+    }
+
+    /// Claude Code's plan limits. The percentage leads, as the balance does above it,
+    /// with the individual windows underneath as quiet supporting detail.
+    private var claude: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Text("Claude Code")
+                    .font(Self.sectionFont)
+
+                Spacer(minLength: 0)
+
+                if let plan = viewModel.claudePlanLabel {
+                    Text(plan)
+                        .font(Self.captionFont)
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            if let usage = viewModel.claudeUsage, !usage.isEmpty {
+                usageDetail(usage)
+            }
+
+            if let error = viewModel.claudeError {
+                errorRow(error)
+            }
+        }
+    }
+
+    private func usageDetail(_ usage: ClaudeUsage) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let headline = Self.headline(for: usage) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("\(headline.percent)%")
+                        .font(Self.subheroFont)
+                        .foregroundColor(Self.usageColor(headline.percent))
+                        .contentTransition(.opacity)
+
+                    Spacer(minLength: 0)
+
+                    if let resets = headline.resetsIn {
+                        Text("resets in \(resets)")
+                            .font(Self.footnoteFont)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 9) {
+                if let fiveHour = usage.fiveHour {
+                    window("5-hour", fiveHour)
+                }
+                if let sevenDay = usage.sevenDay {
+                    window("7-day", sevenDay)
+                }
+                // Opus has its own weekly cap on Max plans, but it is only worth a row
+                // once it has actually been used.
+                if let opus = usage.sevenDayOpus, opus.utilization > 0 {
+                    window("7-day Opus", opus)
+                }
+            }
+        }
+    }
+
+    /// One window: its name, its share of the allowance, and a hairline bar. The bar is
+    /// the only chrome here, and it carries the same color as the number beside it.
+    private func window(_ label: String, _ window: UsageWindow) -> some View {
+        let percent = Int(window.utilization.rounded())
+
+        return VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                Text(label)
+                    .font(Self.captionFont)
+                    .foregroundColor(.secondary)
+
+                Spacer(minLength: 0)
+
+                Text("\(percent)%")
+                    .font(Self.captionFont.monospacedDigit())
+                    .foregroundColor(Self.usageColor(percent))
+            }
+
+            UsageBar(percent: percent, color: Self.usageColor(percent))
+        }
+    }
+
+    /// The number the section leads with: whichever limit the server flags as binding,
+    /// falling back to the 5-hour window when it flags none.
+    private static func headline(for usage: ClaudeUsage) -> (percent: Int, resetsIn: String?)? {
+        if let active = usage.activeLimit {
+            return (active.percent, active.resetsInFormatted)
+        }
+        if let fiveHour = usage.fiveHour {
+            return (Int(fiveHour.utilization.rounded()), fiveHour.resetsInFormatted)
+        }
+        return nil
+    }
+
+    /// The balance colors read the other way round here, because for a limit more is
+    /// worse: green with room to spare, yellow closing in, red nearly spent.
+    private static func usageColor(_ percent: Int) -> Color {
+        if percent >= 90 { return .red }
+        if percent >= 70 { return .yellow }
+        return .green
+    }
+
     // MARK: - Settings
 
     private var settings: some View {
@@ -272,6 +397,34 @@ private struct PulsingBolt: View {
                 .foregroundColor(.secondary)
         }
         .onAppear { isPulsing = true }
+    }
+}
+
+// MARK: - Usage Bar
+
+/// A hairline utilization bar: a track, a fill, and nothing else. Sized to read as a
+/// rule under the label rather than as a control.
+private struct UsageBar: View {
+    /// 0–100. Clamped, because a plan with extra usage enabled can report past 100.
+    let percent: Int
+    let color: Color
+
+    private let height: CGFloat = 3
+
+    var body: some View {
+        GeometryReader { geometry in
+            let fraction = min(max(Double(percent) / 100, 0), 1)
+
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.secondary.opacity(0.15))
+
+                Capsule()
+                    .fill(color)
+                    .frame(width: geometry.size.width * fraction)
+            }
+        }
+        .frame(height: height)
     }
 }
 

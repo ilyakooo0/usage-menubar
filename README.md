@@ -1,10 +1,11 @@
 # HyperCreditsMenubar
 
-A macOS menu bar application that displays your [Hyper (Charm)](https://hyper.charm.land) credit balance.
+A macOS menu bar application that displays your [Hyper (Charm)](https://hyper.charm.land) credit balance — and, if you use the Claude Code CLI, your Claude subscription limits alongside it.
 
 ## Features
 
 - ⚡ **Menu bar display** — shows `⚡{balance}` (e.g. `⚡42`) right in your menu bar
+- 🤖 **Claude Code limits** — your Pro/Max 5-hour and 7-day usage windows in the popover, with the percentage used and a countdown to the next reset. No setup: if you have signed in with the Claude Code CLI, it just appears. If you haven't, the section doesn't
 - 🔄 **Auto-refresh** — fetches your balance on a configurable interval (1m / 5m / 15m / 30m), and again on wake from sleep
 - 📊 **Balance sparkline** — a subtle mini-chart in the popover shows your balance trend over recent fetches
 - 📋 **Click-to-copy** — click the balance number in the popover to copy it to the clipboard
@@ -49,6 +50,17 @@ brew install --cask ilyakooo0/tap/hyper-credits-menubar
 4. Your balance will appear immediately
 
 You can get your API key from [hyper.charm.land](https://hyper.charm.land).
+
+### Claude Code limits (optional, no setup)
+
+If you use the [Claude Code CLI](https://claude.com/claude-code), the popover also shows how much of your Pro/Max plan you have used: the limit currently in effect as a headline percentage, the 5-hour and 7-day windows underneath, and how long until the next reset.
+
+There is nothing to configure. The app reads the OAuth credentials Claude Code already stores when you run `claude` and sign in — first from its login-Keychain item, then from `~/.claude/.credentials.json` if the Keychain has nothing. If neither exists, the Claude section simply doesn't appear; it is not treated as an error, and the Hyper balance is unaffected.
+
+Two things worth knowing:
+
+- **macOS will ask once.** Those credentials belong to Claude Code, not to this app, so the first read prompts you to allow access to the `Claude Code-credentials` Keychain item. Choose **Always Allow** and you won't be asked again.
+- **The credentials are read-only, with one exception.** When the access token has expired, the app refreshes it against Anthropic's token endpoint and writes the result back to wherever it read it from — exactly as Claude Code itself would. Nothing else about them is ever modified, and the fields the app doesn't model are preserved verbatim, so your CLI session keeps working.
 
 ## Settings
 
@@ -122,16 +134,18 @@ hyper-credits-menubar/
 ├── project.yml                          # xcodegen project definition
 ├── HyperCreditsMenubar/
 │   ├── HyperCreditsApp.swift            # @main App, NSStatusBar, timer, sleep/wake
-│   ├── ViewModel.swift                  # Observable state: balance, refresh, notifications
+│   ├── ViewModel.swift                  # Observable state: balance, Claude usage, refresh, notifications
 │   ├── MenuView.swift                   # SwiftUI popover view
 │   ├── CreditsChecker.swift             # API client (GET /v1/credits)
+│   ├── ClaudeUsageClient.swift          # Claude OAuth client (GET /api/oauth/usage) + models
 │   ├── KeychainHelper.swift             # Keychain wrapper for API key
 │   ├── VersionFormatter.swift           # YYYY.MM.DD.HHHH formatting
 │   ├── Info.plist                       # LSUIElement=true (agent app)
-│   ├── HyperCreditsMenubar.entitlements # Network client entitlements
+│   ├── HyperCreditsMenubar.entitlements # Network client; deliberately not sandboxed
 │   └── Assets.xcassets/                 # App icon, accent color
 ├── HyperCreditsMenubarTests/
 │   ├── CreditsCheckerTests.swift        # API, retry, fractional balance, keychain tests
+│   ├── ClaudeUsageClientTests.swift     # Usage decoding, token refresh, retry, credential store
 │   └── VersionFormatterTests.swift      # Version formatting tests
 ├── .github/workflows/
 │   └── release.yml                      # Build + release on push to master
@@ -150,6 +164,9 @@ hyper-credits-menubar/
 6. **State**: `ViewModel` owns the balance, loading/error state, balance history (for the sparkline), refresh task (cancellable to prevent races), and the refresh interval, and is shared between the menu bar item and the popover.
 7. **Notifications**: When the balance crosses below 10 credits — or is already below 10 on the first successful fetch — `ViewModel` posts a local `UNUserNotification`. Permission is requested only once.
 8. **Agent app**: `LSUIElement=true` in `Info.plist` makes the app a background agent — no dock icon, no main window.
+9. **Claude usage**: `ClaudeUsageClient` reads Claude Code's OAuth credentials (its `Claude Code-credentials` Keychain item via `/usr/bin/security`, falling back to `~/.claude/.credentials.json`), refreshes the access token when it has expired, and fetches `GET https://api.anthropic.com/api/oauth/usage` with `Authorization: Bearer …` and `anthropic-beta: oauth-2025-04-20`. It is an actor so that overlapping refreshes (timer, manual click, wake) join a single in-flight token exchange — the endpoint rotates the refresh token, and rotating it twice would sign Claude Code out. Missing credentials are reported as "not configured" rather than as an error, and the popover hides the section.
+10. **Independent fetches**: `ViewModel.refresh()` runs the Hyper and Claude requests concurrently with `async let`. Neither can fail, stall, or be unconfigured in a way that affects the other.
+11. **No sandbox**: Reading credentials that belong to another app means spawning `/usr/bin/security` and reading a file in the user's home directory, neither of which the App Sandbox permits. The app is distributed ad-hoc signed via Homebrew rather than through the App Store, where the sandbox would be mandatory.
 
 ## Credits
 
