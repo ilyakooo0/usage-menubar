@@ -35,13 +35,77 @@ jobs:
         run: brew install xcodegen
 
       # ── Inject version into project.yml ───────────────────────────────
+      # Parses project.yml as YAML and sets the four version fields, rather
+      # than pattern-matching with sed. A real parser can't corrupt unrelated
+      # keys that happen to match the regex, and it fails loudly if the file
+      # structure changes. sed remains as a fallback if pyyaml is unavailable.
+      #
+      # Note: the YAML round-trip drops the comments from project.yml. That
+      # only affects this ephemeral CI checkout, never the committed file.
       - name: Inject version into project.yml
+        env:
+          VERSION: ${{ env.VERSION }}
+          INJECT_PY: |
+            import os
+            import yaml
+
+            version = os.environ["VERSION"]
+            path = "project.yml"
+
+            with open(path) as f:
+                doc = yaml.safe_load(f)
+
+            # Force these scalars to be emitted double-quoted. Xcode version
+            # fields must be strings; an unquoted value risks being read back
+            # as a number by any downstream YAML consumer.
+            class Quoted(str):
+                pass
+
+            yaml.add_representer(
+                Quoted,
+                lambda dumper, data: dumper.represent_scalar(
+                    "tag:yaml.org,2002:str", str(data), style='"'
+                ),
+            )
+
+            base = doc.setdefault("settings", {}).setdefault("base", {})
+            base["MARKETING_VERSION"] = Quoted(version)
+            base["CURRENT_PROJECT_VERSION"] = Quoted(version)
+
+            props = (
+                doc.setdefault("targets", {})
+                .setdefault("HyperCreditsMenubar", {})
+                .setdefault("info", {})
+                .setdefault("properties", {})
+            )
+            props["CFBundleShortVersionString"] = Quoted(version)
+            props["CFBundleVersion"] = Quoted(version)
+
+            with open(path, "w") as f:
+                yaml.dump(doc, f, sort_keys=False, default_flow_style=False)
+
+            print(f"Rewrote project.yml with version {version}")
         run: |
-          sed -i '' "s/MARKETING_VERSION: \".*\"/MARKETING_VERSION: \"$VERSION\"/" project.yml
-          sed -i '' "s/CFBundleShortVersionString: \".*\"/CFBundleShortVersionString: \"$VERSION\"/" project.yml
-          sed -i '' "s/CURRENT_PROJECT_VERSION: \".*\"/CURRENT_PROJECT_VERSION: \"$VERSION\"/" project.yml
-          sed -i '' "s/CFBundleVersion: \".*\"/CFBundleVersion: \"$VERSION\"/" project.yml
-          echo "Updated project.yml with version $VERSION"
+          set -eo pipefail
+
+          if ! python3 -c 'import yaml' 2>/dev/null; then
+            echo "pyyaml not importable — trying to install it"
+            python3 -m pip install --quiet --disable-pip-version-check pyyaml \
+              || python3 -m pip install --quiet --disable-pip-version-check --break-system-packages pyyaml \
+              || true
+          fi
+
+          if python3 -c 'import yaml' 2>/dev/null; then
+            python3 -c "$INJECT_PY"
+          else
+            echo "::warning title=pyyaml unavailable::Falling back to sed for version injection."
+            sed -i '' "s/MARKETING_VERSION: \".*\"/MARKETING_VERSION: \"$VERSION\"/" project.yml
+            sed -i '' "s/CFBundleShortVersionString: \".*\"/CFBundleShortVersionString: \"$VERSION\"/" project.yml
+            sed -i '' "s/CURRENT_PROJECT_VERSION: \".*\"/CURRENT_PROJECT_VERSION: \"$VERSION\"/" project.yml
+            sed -i '' "s/CFBundleVersion: \".*\"/CFBundleVersion: \"$VERSION\"/" project.yml
+          fi
+
+          echo "Version fields now in project.yml:"
           grep -E 'MARKETING_VERSION|CFBundleShortVersionString|CURRENT_PROJECT_VERSION|CFBundleVersion' project.yml
 
       # ── Generate Xcode project ────────────────────────────────────────
@@ -78,18 +142,110 @@ jobs:
       - name: Export app from archive
         run: |
           mkdir -p build/export
-          # Simply copy the .app from the archive (no signing in CI)
+          # Simply copy the .app from the archive (no signing during the build)
           cp -R "build/HyperCreditsMenubar.xcarchive/Products/Applications/HyperCreditsMenubar.app" \
                 "build/export/HyperCreditsMenubar.app"
 
-      # ── Zip the app ───────────────────────────────────────────────────
+      # ── Ad-hoc code signing ───────────────────────────────────────────
+      # `-s -` is an ad-hoc signature: no certificate, no Apple identity.
+      # It does NOT make the app trusted — Gatekeeper still shows a prompt on
+      # first launch for a download from the internet. What it does buy us is a
+      # stable code signature, so the app has a consistent code identity for
+      # the Keychain ACL (the API key stays readable across launches instead of
+      # re-prompting) and macOS stops treating each launch as a new binary.
+      - name: Ad-hoc code sign the app
+        run: |
+          set -eo pipefail
+          APP="build/export/HyperCreditsMenubar.app"
+          codesign --force --deep -s - "$APP"
+          echo "── Verifying signature ──"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -dvv "$APP" 2>&1 | grep -E 'Identifier|Signature|Format' || true
+
+      # ── Zip the app (submission candidate) ────────────────────────────
+      # notarytool takes a zip, so build it before notarizing. If notarization
+      # runs it staples a ticket into the .app, and the final packaging step
+      # below re-zips so the released archive contains the stapled bundle.
       - name: Zip the app
         run: |
+          set -eo pipefail
           cd build/export
-          ditto -c -k --keepParent HyperCreditsMenubar.app "HyperCreditsMenubar-${{ env.VERSION }}.zip"
+          ditto -c -k --keepParent HyperCreditsMenubar.app "HyperCreditsMenubar-${VERSION}.zip"
+
+      # ── Detect notarization credentials ───────────────────────────────
+      # Secrets are checked in a shell step (not a step-level `if:`) so the
+      # workflow stays valid and simply skips notarization when unconfigured.
+      #
+      # Notarization also needs the App Store Connect private key itself, so
+      # NOTARY_API_KEY_P8 (the full .p8 file contents) is required alongside
+      # the key id and issuer.
+      - name: Check notarization credentials
+        id: notary
+        env:
+          NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
+          NOTARY_API_KEY_ISSUER: ${{ secrets.NOTARY_API_KEY_ISSUER }}
+          NOTARY_API_KEY_P8: ${{ secrets.NOTARY_API_KEY_P8 }}
+        run: |
+          if [ -n "${NOTARY_API_KEY_ID:-}" ] \
+            && [ -n "${NOTARY_API_KEY_ISSUER:-}" ] \
+            && [ -n "${NOTARY_API_KEY_P8:-}" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "Notarization credentials present."
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Notarization skipped::NOTARY_API_KEY_ID / NOTARY_API_KEY_ISSUER / NOTARY_API_KEY_P8 are not all set. Releasing the ad-hoc signed build."
+          fi
+
+      # ── Notarize and staple ───────────────────────────────────────────
+      # IMPORTANT: Apple's notary service only accepts builds signed with a
+      # Developer ID Application certificate under the hardened runtime. An
+      # ad-hoc signature is rejected ("The binary is not signed with a valid
+      # Developer ID certificate"). This step is therefore wired up and ready,
+      # but it will not pass until the archive is signed with a real Developer
+      # ID identity — which needs the certificate imported into the runner
+      # keychain and CODE_SIGNING_ALLOWED turned back on in the archive step.
+      #
+      # continue-on-error keeps a failed/rejected notarization from blocking
+      # the release; the ad-hoc signed artifact still ships.
+      - name: Notarize and staple
+        if: steps.notary.outputs.available == 'true'
+        continue-on-error: true
+        env:
+          NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
+          NOTARY_API_KEY_ISSUER: ${{ secrets.NOTARY_API_KEY_ISSUER }}
+          NOTARY_API_KEY_P8: ${{ secrets.NOTARY_API_KEY_P8 }}
+        run: |
+          set -eo pipefail
+
+          KEY_FILE="$RUNNER_TEMP/notary_key.p8"
+          trap 'rm -f "$KEY_FILE"' EXIT
+          printf '%s' "$NOTARY_API_KEY_P8" > "$KEY_FILE"
+          chmod 600 "$KEY_FILE"
+
+          echo "── Submitting to Apple notary service ──"
+          xcrun notarytool submit "build/export/HyperCreditsMenubar-${VERSION}.zip" \
+            --key "$KEY_FILE" \
+            --key-id "$NOTARY_API_KEY_ID" \
+            --issuer "$NOTARY_API_KEY_ISSUER" \
+            --wait \
+            --timeout 30m
+
+          echo "── Stapling ticket to the app ──"
+          xcrun stapler staple "build/export/HyperCreditsMenubar.app"
+          xcrun stapler validate "build/export/HyperCreditsMenubar.app"
+
+      # ── Package release artifacts ─────────────────────────────────────
+      # Re-zip from the .app so the published archive picks up a stapled
+      # notarization ticket when the step above succeeded.
+      - name: Package release artifacts
+        run: |
+          set -eo pipefail
+          cd build/export
+          rm -f "HyperCreditsMenubar-${VERSION}.zip"
+          ditto -c -k --keepParent HyperCreditsMenubar.app "HyperCreditsMenubar-${VERSION}.zip"
           # Also create a stable-named zip for the Homebrew Cask
-          cp "HyperCreditsMenubar-${{ env.VERSION }}.zip" "HyperCreditsMenubar-latest.zip"
-          cp "HyperCreditsMenubar-${{ env.VERSION }}.zip" ../../
+          cp "HyperCreditsMenubar-${VERSION}.zip" "HyperCreditsMenubar-latest.zip"
+          cp "HyperCreditsMenubar-${VERSION}.zip" ../../
           cp "HyperCreditsMenubar-latest.zip" ../../
 
       # ── Upload build artifact ─────────────────────────────────────────
@@ -117,8 +273,9 @@ jobs:
             3. Launch the app — it will appear in your menu bar as ⚡
             4. Click the ⚡ icon, enter your Hyper API key, and click Save
 
-            > **Note:** This build is unsigned. On first launch you may need to
-            > right-click → Open, or allow it in System Settings → Privacy & Security.
+            > **Note:** This build is ad-hoc signed, not signed with an Apple
+            > Developer ID. On first launch you will still need to right-click →
+            > **Open**, or allow it in **System Settings → Privacy & Security**.
 
             ### Changes
             Built from commit ${{ github.sha }}

@@ -5,12 +5,16 @@ A macOS menu bar application that displays your [Hyper (Charm)](https://hyper.ch
 ## Features
 
 - ⚡ **Menu bar display** — shows `⚡{balance}` (e.g. `⚡42`) right in your menu bar
-- 🔄 **Auto-refresh** — fetches your balance every 5 minutes
+- 🔄 **Auto-refresh** — fetches your balance on a configurable interval (1m / 5m / 15m / 30m), and again on wake from sleep
+- 📊 **Balance sparkline** — a subtle mini-chart in the popover shows your balance trend over recent fetches
+- 📋 **Click-to-copy** — click the balance number in the popover to copy it to the clipboard
+- 🖱️ **Right-click menu** — right-click the menu bar icon for quick access to Refresh, Open hyper.charm.land, and Quit
+- 🔔 **Low-balance notifications** — alerts you when your balance drops below 10 credits, including on the very first fetch if you are already below the threshold
 - 🔒 **Keychain storage** — your API key is stored securely in macOS Keychain
 - 🎨 **Color-coded balance** — green (≥100), yellow (10–99), red (<10)
 - 🔐 **Secure input** — API key field is masked
 - 🚀 **Launch at login** — optional, using `SMAppService`
-- 📋 **Quick link** — opens [hyper.charm.land](https://hyper.charm.land) from the menu
+- 🔑 **Get key link** — quick link to [hyper.charm.land](https://hyper.charm.land) right next to the API key field
 - 🫥 **Agent app** — no dock icon, no main window; lives entirely in the menu bar
 
 ## Installation
@@ -35,7 +39,7 @@ brew install --cask ilyakooo0/tap/hyper-credits-menubar
 3. Unzip and move `HyperCreditsMenubar.app` to `/Applications`
 4. Launch the app — it will appear in your menu bar as ⚡
 
-> **Note:** Releases are currently unsigned. On first launch, right-click the app → **Open**, or allow it in **System Settings → Privacy & Security**.
+> **Note:** Releases are **ad-hoc signed** — the CI build applies `codesign -s -` to the app, which gives it a stable code identity but is *not* an Apple Developer ID signature. macOS will still warn you on first launch: right-click the app → **Open**, or allow it in **System Settings → Privacy & Security**. Removing that prompt entirely requires a paid Developer ID certificate and notarization.
 
 ### Set your API key
 
@@ -45,6 +49,20 @@ brew install --cask ilyakooo0/tap/hyper-credits-menubar
 4. Your balance will appear immediately
 
 You can get your API key from [hyper.charm.land](https://hyper.charm.land).
+
+## Settings
+
+Everything is configured from the popover — click the ⚡ icon in the menu bar.
+
+| Setting             | Where                          | Notes                                                                                |
+| ------------------- | ------------------------------ | ------------------------------------------------------------------------------------ |
+| **API key**         | **API Key** field → **Save**   | Stored in the macOS Keychain. Clearing the field and saving deletes the stored key.  |
+| **Launch at login** | **Launch at Login** toggle     | Registers the app with `SMAppService`.                                               |
+| **Notifications**   | System permission prompt       | macOS asks on first launch (only if not already decided). Required for low-balance alerts. |
+| **Refresh now**     | **Refresh** button             | Forces an immediate fetch, on top of the automatic refresh.                            |
+| **Refresh interval**| **Refresh every** picker       | Choose 1m, 5m, 15m, or 30m. Defaults to 5m. Stored in `UserDefaults` and persisted across launches. |
+
+The app also refreshes automatically when your Mac wakes from sleep.
 
 ## Build from source
 
@@ -103,16 +121,17 @@ The version is derived automatically from the commit timestamp in the GitHub Act
 hyper-credits-menubar/
 ├── project.yml                          # xcodegen project definition
 ├── HyperCreditsMenubar/
-│   ├── HyperCreditsApp.swift            # @main App, NSStatusBar, timer
+│   ├── HyperCreditsApp.swift            # @main App, NSStatusBar, timer, sleep/wake
+│   ├── ViewModel.swift                  # Observable state: balance, refresh, notifications
+│   ├── MenuView.swift                   # SwiftUI popover view
 │   ├── CreditsChecker.swift             # API client (GET /v1/credits)
-│   ├── MenuView.swift                   # SwiftUI popover view + ViewModel
 │   ├── KeychainHelper.swift             # Keychain wrapper for API key
 │   ├── VersionFormatter.swift           # YYYY.MM.DD.HHHH formatting
 │   ├── Info.plist                       # LSUIElement=true (agent app)
 │   ├── HyperCreditsMenubar.entitlements # Network client entitlements
 │   └── Assets.xcassets/                 # App icon, accent color
 ├── HyperCreditsMenubarTests/
-│   ├── CreditsCheckerTests.swift        # JSON decoding tests
+│   ├── CreditsCheckerTests.swift        # API, retry, fractional balance, keychain tests
 │   └── VersionFormatterTests.swift      # Version formatting tests
 ├── .github/workflows/
 │   └── release.yml                      # Build + release on push to master
@@ -123,12 +142,14 @@ hyper-credits-menubar/
 
 ## How it works
 
-1. **Menu bar item**: The app creates an `NSStatusItem` with a variable-length button showing `⚡{balance}` or `⚡?`.
-2. **Popover**: Clicking the menu bar item shows an `NSPopover` containing a SwiftUI `MenuView`.
-3. **API client**: `CreditsChecker` performs `GET https://hyper.charm.land/v1/credits` with `Authorization: Bearer {apiKey}` and decodes `{"balance": <int>}`.
-4. **Keychain**: The API key is stored/retrieved via `KeychainHelper` using the macOS Security framework.
-5. **Timer**: A `Timer` fires every 5 minutes to refresh the balance.
-6. **Agent app**: `LSUIElement=true` in `Info.plist` makes the app a background agent — no dock icon, no main window.
+1. **Menu bar item**: The app creates an `NSStatusItem` with a variable-length button showing `⚡{balance}` or `⚡?`. Left-click toggles the popover; right-click opens a context menu (Refresh, Open hyper.charm.land, Quit).
+2. **Popover**: Clicking the menu bar item shows an `NSPopover` containing a SwiftUI `MenuView` with the balance, sparkline, API key field, and settings.
+3. **API client**: `CreditsChecker` performs `GET https://hyper.charm.land/v1/credits` with `Authorization: Bearer <key>`, retries transient failures (5xx, timeouts) with exponential backoff, and decodes `{"balance": <int>}` (tolerating fractional values by rounding).
+4. **Keychain**: The API key is stored/retrieved via `KeychainHelper` using the macOS Security framework. `save()` returns a `Bool` indicating success.
+5. **Timer**: A `Timer` fires at the user-selected interval (1m / 5m / 15m / 30m, default 5m) to refresh the balance; the app also refreshes on wake from sleep. Changing the interval in the popover restarts the timer immediately.
+6. **State**: `ViewModel` owns the balance, loading/error state, balance history (for the sparkline), refresh task (cancellable to prevent races), and the refresh interval, and is shared between the menu bar item and the popover.
+7. **Notifications**: When the balance crosses below 10 credits — or is already below 10 on the first successful fetch — `ViewModel` posts a local `UNUserNotification`. Permission is requested only once.
+8. **Agent app**: `LSUIElement=true` in `Info.plist` makes the app a background agent — no dock icon, no main window.
 
 ## Credits
 

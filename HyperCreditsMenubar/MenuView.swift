@@ -1,221 +1,40 @@
-import Foundation
 import SwiftUI
-import Combine
-import ServiceManagement
-import UserNotifications
-
-/// The view model that drives the menu bar display and the popover content.
-final class ViewModel: ObservableObject {
-    /// The last known balance. `nil` when there has never been a successful fetch.
-    @Published var balance: Int?
-
-    /// `true` while a network request is in flight.
-    @Published var isLoading = false
-
-    /// A human-readable error message, shown when the balance can't be fetched.
-    @Published var errorMessage: String?
-
-    /// The API key entered by the user (loaded from Keychain on init).
-    @Published var apiKeyInput: String = ""
-
-    /// Timestamp of the last successful balance fetch.
-    @Published var lastUpdated: Date?
-
-    /// Brief "✓ Saved" confirmation shown after saving the API key.
-    @Published var savedConfirmation: Bool = false
-
-    /// Whether launch-at-login is enabled.
-    @Published var launchAtLogin: Bool {
-        didSet {
-            guard !isInitializingLaunchAtLogin else { return }
-            updateLaunchAtLogin(launchAtLogin)
-        }
-    }
-
-    /// Flag to suppress the didSet during initial setup.
-    private var isInitializingLaunchAtLogin = true
-
-    private let checker: CreditsChecking
-
-    init(checker: CreditsChecking = CreditsChecker()) {
-        self.checker = checker
-        apiKeyInput = KeychainHelper.load() ?? ""
-        launchAtLogin = SMAppService.mainApp.status == .enabled
-        isInitializingLaunchAtLogin = false
-    }
-
-    // MARK: - Balance
-
-    /// Formats an integer with thousands grouping separator.
-    private func formatBalance(_ value: Int) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .decimal
-        return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
-    }
-
-    /// The text to show in the menu bar: `⚡…` while loading, `⚡?` when no balance, `⚡{balance}` otherwise.
-    var statusBarItemText: String {
-        if isLoading && balance == nil {
-            return "⚡…"
-        }
-        if let balance = balance {
-            return "⚡\(formatBalance(balance))"
-        }
-        return "⚡?"
-    }
-
-    /// The formatted balance string for display in the popover.
-    var formattedBalance: String {
-        guard let balance = balance else { return "?" }
-        return formatBalance(balance)
-    }
-
-    /// The color for the balance display based on thresholds.
-    var balanceColor: Color {
-        guard let balance = balance else { return .secondary }
-        if balance >= 100 { return .green }
-        if balance >= 10 { return .yellow }
-        return .red
-    }
-
-    /// Relative time string for the last successful update, or nil if never updated.
-    var lastUpdatedText: String? {
-        guard let lastUpdated = lastUpdated else { return nil }
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .short
-        return "Updated \(formatter.localizedString(for: lastUpdated, relativeTo: Date()))"
-    }
-
-    /// Refreshes the balance from the API. No-op if no API key is set.
-    func refresh() {
-        let key = apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty else {
-            balance = nil
-            errorMessage = nil
-            lastUpdated = nil
-            return
-        }
-
-        Task { @MainActor in
-            isLoading = true
-            // Don't clear errorMessage here — keep showing the last error
-            // until we have a successful result.
-            do {
-                let result = try await checker.fetchBalance(apiKey: key)
-                // Check for low-balance threshold crossing before updating
-                let previousBalance = balance
-                balance = result
-                errorMessage = nil
-                lastUpdated = Date()
-                isLoading = false
-
-                // Low-balance notification: only on threshold crossing (≥10 → <10)
-                if let prev = previousBalance, prev >= 10, result < 10 {
-                    sendLowBalanceNotification(balance: result)
-                }
-            } catch {
-                // Keep the stale balance value — don't wipe it on error.
-                // Only set balance = nil if there was never a successful fetch
-                // (it's already nil in that case, so nothing to do).
-                errorMessage = error.localizedDescription
-                isLoading = false
-            }
-        }
-    }
-
-    // MARK: - Low Balance Notification
-
-    private func sendLowBalanceNotification(balance: Int) {
-        let center = UNUserNotificationCenter.current()
-        center.getNotificationSettings { settings in
-            guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else {
-                return
-            }
-            let content = UNMutableNotificationContent()
-            content.title = "Low Hyper Credits"
-            let formatter = NumberFormatter()
-            formatter.numberStyle = .decimal
-            let balanceStr = formatter.string(from: NSNumber(value: balance)) ?? "\(balance)"
-            content.body = "Low Hyper credits: \(balanceStr) remaining"
-            content.sound = .default
-
-            let request = UNNotificationRequest(
-                identifier: "low-balance-alert",
-                content: content,
-                trigger: nil
-            )
-            center.add(request)
-        }
-    }
-
-    // MARK: - API Key
-
-    /// Saves the current `apiKeyInput` to the Keychain and triggers a refresh.
-    func saveAPIKey() {
-        let key = apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        if key.isEmpty {
-            KeychainHelper.delete()
-            balance = nil
-            errorMessage = nil
-            lastUpdated = nil
-        } else {
-            KeychainHelper.save(key)
-            refresh()
-        }
-
-        // Show "✓ Saved" confirmation, auto-reset after 2 seconds
-        savedConfirmation = true
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            savedConfirmation = false
-        }
-    }
-
-    // MARK: - Launch at Login
-
-    func updateLaunchAtLogin(_ enabled: Bool) {
-        if enabled {
-            try? SMAppService.mainApp.register()
-        } else {
-            try? SMAppService.mainApp.unregister()
-        }
-    }
-}
-
-// MARK: - MenuView
 
 /// The SwiftUI view shown inside the popover when the menu bar item is clicked.
 struct MenuView: View {
     @ObservedObject var viewModel: ViewModel
 
+    private static let websiteURL = URL(string: "https://hyper.charm.land")!
+
     var body: some View {
-        VStack(spacing: 16) {
-            // Balance display
-            VStack(spacing: 4) {
-                if viewModel.isLoading && viewModel.balance == nil {
-                    ProgressView()
-                        .scaleEffect(0.8)
-                    Text("Loading…")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                } else if viewModel.balance != nil {
-                    Text(viewModel.formattedBalance)
-                        .font(.system(size: 42, weight: .bold, design: .rounded))
-                        .foregroundColor(viewModel.balanceColor)
-                    Text("credits")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                } else {
-                    Text("?")
-                        .font(.system(size: 42, weight: .bold, design: .rounded))
-                        .foregroundColor(.secondary)
-                    Text("credits")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
+        VStack(alignment: .leading, spacing: 18) {
+            hero
+            settings
+            footer
+        }
+        .padding(16)
+        .frame(width: 280)
+        .animation(.easeInOut(duration: 0.2), value: viewModel.savedConfirmation)
+        .animation(.easeInOut(duration: 0.2), value: viewModel.copiedConfirmation)
+    }
+
+    // MARK: - Hero
+
+    private var hero: some View {
+        VStack(spacing: 6) {
+            if viewModel.isLoading && viewModel.balance == nil {
+                ProgressView()
+                    .scaleEffect(0.8)
+                    .frame(height: 50)
+                Text("Loading…")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                balanceNumber
+                caption
+                sparkline
             }
 
-            // Last updated time
             if let lastUpdatedText = viewModel.lastUpdatedText {
                 Text(lastUpdatedText)
                     .font(.caption2)
@@ -227,21 +46,72 @@ struct MenuView: View {
                     .font(.caption)
                     .foregroundColor(.red)
                     .multilineTextAlignment(.center)
-                    .padding(.horizontal)
+                    .padding(.top, 2)
             }
+        }
+        .frame(maxWidth: .infinity)
+    }
 
+    /// The balance itself. Clicking it copies the raw number to the clipboard.
+    private var balanceNumber: some View {
+        Button(action: { viewModel.copyBalanceToClipboard() }) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(viewModel.formattedBalance)
+                    .font(.system(size: 42, weight: .bold, design: .rounded))
+                    .foregroundColor(viewModel.balanceColor)
+
+                if let symbol = viewModel.balanceTrend.symbolName {
+                    Image(systemName: symbol)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(viewModel.balance == nil)
+        .help("Click to copy")
+    }
+
+    /// Doubles as the copy confirmation so the layout doesn't shift.
+    private var caption: some View {
+        Group {
+            if viewModel.copiedConfirmation {
+                Text("✓ Copied")
+                    .foregroundColor(.green)
+            } else {
+                Text("credits")
+                    .foregroundColor(.secondary)
+            }
+        }
+        .font(.caption)
+    }
+
+    @ViewBuilder
+    private var sparkline: some View {
+        // Key paths can't index tuple elements, so this stays a closure.
+        let values = viewModel.balanceHistory.map { $0.balance }
+        if values.count >= 2 {
+            Sparkline(values: values)
+                .frame(height: 24)
+                .padding(.top, 2)
+        }
+    }
+
+    // MARK: - Settings
+
+    private var settings: some View {
+        VStack(alignment: .leading, spacing: 10) {
             Divider()
 
-            // Refresh button
-            Button(action: { viewModel.refresh() }) {
-                Label("Refresh now", systemImage: "arrow.clockwise")
-            }
-            .disabled(viewModel.isLoading)
-
-            // API key section
             VStack(alignment: .leading, spacing: 6) {
-                Text("API Key")
-                    .font(.headline)
+                HStack {
+                    Text("API Key")
+                        .font(.headline)
+                    Spacer()
+                    Link("Get key →", destination: Self.websiteURL)
+                        .font(.caption)
+                }
+
                 HStack {
                     SecureField("sk-...", text: $viewModel.apiKeyInput)
                         .textFieldStyle(.roundedBorder)
@@ -249,6 +119,7 @@ struct MenuView: View {
                         viewModel.saveAPIKey()
                     }
                 }
+
                 if viewModel.savedConfirmation {
                     Text("✓ Saved")
                         .font(.caption)
@@ -257,30 +128,94 @@ struct MenuView: View {
                 }
             }
 
-            // Launch at login toggle
-            Toggle("Launch at Login", isOn: $viewModel.launchAtLogin)
-                .toggleStyle(.switch)
-
-            // Links
             HStack {
-                if let url = URL(string: "https://hyper.charm.land") {
-                    Button("Open hyper.charm.land") {
-                        NSWorkspace.shared.open(url)
+                Text("Refresh every")
+                Spacer()
+                Picker("Refresh every", selection: $viewModel.refreshIntervalMinutes) {
+                    ForEach(RefreshInterval.options, id: \.self) { minutes in
+                        Text("\(minutes)m").tag(minutes)
                     }
                 }
-                Spacer()
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .fixedSize()
             }
 
+            Toggle("Launch at Login", isOn: $viewModel.launchAtLogin)
+                .toggleStyle(.switch)
+        }
+    }
+
+    // MARK: - Footer
+
+    private var footer: some View {
+        VStack(alignment: .leading, spacing: 10) {
             Divider()
 
-            // Quit
-            Button("Quit HyperCredits") {
-                NSApplication.shared.terminate(nil)
+            HStack {
+                Button(action: { viewModel.refresh() }) {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .disabled(viewModel.isLoading)
+
+                Spacer()
+
+                Button("Quit") {
+                    NSApplication.shared.terminate(nil)
+                }
+                .keyboardShortcut("q")
             }
-            .keyboardShortcut("q")
+
+            Link("hyper.charm.land", destination: Self.websiteURL)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, alignment: .center)
         }
-        .padding(16)
-        .frame(width: 280)
-        .animation(.easeInOut(duration: 0.2), value: viewModel.savedConfirmation)
+    }
+}
+
+// MARK: - Sparkline
+
+/// A minimal line chart of recent balances: no axes, no fill, no labels.
+/// Points are spaced evenly by index rather than by timestamp, which keeps the
+/// shape readable when fetches are irregular (wake-ups, manual refreshes).
+struct Sparkline: View {
+    let values: [Int]
+
+    /// Keeps the stroke from being clipped at the top and bottom edges.
+    private let verticalInset: CGFloat = 2
+
+    var body: some View {
+        GeometryReader { geometry in
+            Path { path in
+                guard values.count >= 2 else { return }
+
+                let size = geometry.size
+                let minValue = values.min() ?? 0
+                let maxValue = values.max() ?? 0
+                let range = Double(maxValue - minValue)
+
+                let stepX = size.width / CGFloat(values.count - 1)
+                let usableHeight = max(size.height - verticalInset * 2, 1)
+
+                for (index, value) in values.enumerated() {
+                    // A flat series has no range to normalize against; center it.
+                    let normalized = range == 0 ? 0.5 : Double(value - minValue) / range
+                    let point = CGPoint(
+                        x: CGFloat(index) * stepX,
+                        y: verticalInset + (1 - CGFloat(normalized)) * usableHeight
+                    )
+                    if index == 0 {
+                        path.move(to: point)
+                    } else {
+                        path.addLine(to: point)
+                    }
+                }
+            }
+            .stroke(
+                Color.secondary.opacity(0.5),
+                style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round)
+            )
+        }
     }
 }

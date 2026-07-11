@@ -1,6 +1,14 @@
+# xcodegen project definition — run `xcodegen generate` to (re)create
+# HyperCreditsMenubar.xcodeproj. The .xcodeproj is not committed; this file is
+# the source of truth for project structure and build settings.
 name: HyperCreditsMenubar
+
 options:
+  # Reverse-DNS prefix xcodegen uses when it needs to synthesize a bundle id.
+  # The app target pins its own id explicitly below, so this is just a default.
   bundleIdPrefix: com.ilyakooo0
+  # Oldest macOS we support. SMAppService (launch at login) requires 13.0+;
+  # we target 14.0 (Sonoma). Keep in sync with MACOSX_DEPLOYMENT_TARGET below.
   deploymentTarget:
     macOS: "14.0"
   createIntermediateGroups: true
@@ -9,20 +17,29 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.9"
+    # Local/CI builds are unsigned at compile time. Release builds get an
+    # ad-hoc signature applied after archiving (see .github/workflows/release.yml).
     DEVELOPMENT_TEAM: ""
     CODE_SIGN_IDENTITY: ""
     CODE_SIGNING_REQUIRED: "NO"
     CODE_SIGNING_ALLOWED: "NO"
+    # Version defaults for local builds only. The release workflow overwrites
+    # these (and the CFBundle* keys below) with a version derived from the
+    # commit timestamp, formatted YYYY.MM.DD.HHHH — so editing them by hand
+    # has no effect on what ships.
     MARKETING_VERSION: "1.0.0"
     CURRENT_PROJECT_VERSION: "1"
 
 targets:
+  # ── The menu bar app ───────────────────────────────────────────────────
   HyperCreditsMenubar:
     type: application
     platform: macOS
     sources:
       - path: HyperCreditsMenubar
         excludes:
+          # Referenced explicitly via INFOPLIST_FILE / CODE_SIGN_ENTITLEMENTS,
+          # so they must not also be compiled in as resources.
           - "Info.plist"
           - "*.entitlements"
     resources:
@@ -33,8 +50,10 @@ targets:
         CFBundleName: HyperCreditsMenubar
         CFBundleDisplayName: Hyper Credits
         CFBundleIdentifier: com.ilyakooo0.hyper-credits-menubar
+        # Overwritten by CI — see the note on MARKETING_VERSION above.
         CFBundleVersion: "1"
         CFBundleShortVersionString: "1.0.0"
+        # Agent app: no dock icon and no main window; it lives in the menu bar.
         LSUIElement: true
         LSApplicationCategoryType: public.app-category.utilities
         NSHighResolutionCapable: true
@@ -43,6 +62,9 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.ilyakooo0.hyper-credits-menubar
         PRODUCT_NAME: HyperCreditsMenubar
         INFOPLIST_FILE: HyperCreditsMenubar/Info.plist
+        # Grants the outgoing-network-connection entitlement needed to reach
+        # the Hyper API. Stripped in CI's archive step (unsigned builds can't
+        # carry entitlements).
         CODE_SIGN_ENTITLEMENTS: HyperCreditsMenubar/HyperCreditsMenubar.entitlements
         ENABLE_HARDENED_RUNTIME: YES
         MACOSX_DEPLOYMENT_TARGET: "14.0"
@@ -50,6 +72,9 @@ targets:
           - "$(inherited)"
           - "@executable_path/../Frameworks"
 
+  # ── Unit tests ─────────────────────────────────────────────────────────
+  # Hosted by the app target (BUNDLE_LOADER/TEST_HOST) so tests can reach the
+  # app's internal types without re-declaring them.
   HyperCreditsMenubarTests:
     type: bundle.unit-test
     platform: macOS
