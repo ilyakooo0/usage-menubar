@@ -317,8 +317,7 @@ struct MenuView: View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
-                    Text("API Key")
-                        .font(Self.sectionFont)
+                    sectionHeader("Hyper API Key", systemImage: "bolt.fill")
 
                     Spacer(minLength: 0)
 
