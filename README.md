@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="UsageMenubar/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png" width="128" height="128" alt="Usage Menubar app icon">
+  <img src="UsageMenubar/Assets.xcassets/AppIcon.appiconset/icon-1024.png" width="128" height="128" alt="Usage Menubar app icon">
 </p>
 
 # UsageMenubar
