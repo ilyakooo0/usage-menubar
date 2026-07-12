@@ -7,7 +7,7 @@ Claude Code's Pro/Max usage limits when the CLI is signed in on the machine.
 - `ViewModel.swift` — Observable state: balance, Claude usage, refresh, notifications, history
 - `MenuView.swift` — SwiftUI popover view (balance, sparkline, Claude limits, settings)
 - `CreditsChecker.swift` — API client for `GET https://hyper.charm.land/v1/credits`
-- `ClaudeUsageClient.swift` — Claude OAuth client + models for `GET https://api.anthropic.com/api/oauth/usage`
+- `ClaudeUsageClient.swift` — read-only Claude OAuth client + models for `GET https://api.anthropic.com/api/oauth/usage`
 - `KeychainHelper.swift` — Keychain wrapper (KeychainStore + KeychainHelper)
 - `VersionFormatter.swift` — Version string formatting
 
@@ -15,14 +15,23 @@ The status bar title stays `⚡{balance}` (Hyper only); Claude usage lives in th
 The two fetches are independent — `ViewModel.refresh()` runs them with `async let`, and
 either can fail or be unconfigured without touching the other.
 
-## Claude credentials (read-only, with one exception)
+## Claude credentials (strictly read-only)
 `ClaudeUsageClient` reads the credentials **Claude Code owns**: its `Claude Code-credentials`
 Keychain item (via `/usr/bin/security`), falling back to `~/.claude/.credentials.json`.
-- Never modify them, except the token refresh, which writes back a rotated token to
-  whichever source it was read from, preserving fields we don't model (patched raw JSON).
-- The refresh endpoint **rotates the refresh token** — refreshing twice with the same one
-  signs the user out of their own CLI. Hence the client is an `actor` and dedups
-  concurrent refreshes onto one in-flight, cancellation-immune `Task`.
+- **Never write them. Never refresh the token.** `ClaudeCredentialStoring` has no `save`,
+  and that is load-bearing, not an oversight. The app reads the current access token and
+  spends it as-is.
+- Why: the token endpoint **rotates the refresh token**, and the CLI refreshes on its own
+  schedule. An app that also refreshed would race it — whoever went second would present a
+  refresh token the server had already retired, signing the user out of their own terminal.
+  This app *did* do that, and it was the top bug. Do not reintroduce it, however tempting a
+  "just refresh it for the user" convenience looks.
+- A spent or revoked token (401/403) is therefore terminal, not retried: it surfaces as
+  `.invalidCredentials`, whose message tells the user to run `claude`. The CLI mints a new
+  token; the next fetch (every 1–5 min, credentials re-read each time) picks it up for free.
+- Consequently `ClaudeOAuthCredentials` models neither `refreshToken` nor `expiresAt` —
+  nothing here has any business knowing them.
+- Retries still apply to *transport* failures (timeouts, 5xx, 429). That's not auth.
 - Missing credentials are **not an error** — the popover just omits the section.
 - **The app cannot be sandboxed**: spawning `security` and reading `~/.claude` require it
   to be off. Distribution is ad-hoc signed via Homebrew, not the App Store.

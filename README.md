@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="UsageMenubar/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png" width="128" height="128" alt="Usage Menubar app icon">
+  <img src="UsageMenubar/Assets.xcassets/AppIcon.appiconset/icon-1024.png" width="128" height="128" alt="Usage Menubar app icon">
 </p>
 
 # UsageMenubar
@@ -64,7 +64,7 @@ There is nothing to configure. The app reads the OAuth credentials Claude Code a
 Two things worth knowing:
 
 - **macOS will ask once.** Those credentials belong to Claude Code, not to this app, so the first read prompts you to allow access to the `Claude Code-credentials` Keychain item. Choose **Always Allow** and you won't be asked again.
-- **The credentials are read-only, with one exception.** When the access token has expired, the app refreshes it against Anthropic's token endpoint and writes the result back to wherever it read it from — exactly as Claude Code itself would. Nothing else about them is ever modified, and the fields the app doesn't model are preserved verbatim, so your CLI session keeps working.
+- **The credentials are strictly read-only.** The app reads the access token Claude Code stored and spends it as-is. It never refreshes it, and never writes those credentials back — that is the CLI's job alone. (Refreshing rotates the refresh token, so an app doing it behind the CLI's back would race it and sign you out of your own terminal.) If the token has expired, the Claude section says so and asks you to run `claude`; once the CLI has refreshed on its own, the app picks the new token up on its next fetch.
 
 ## Settings
 
@@ -149,7 +149,7 @@ usage-menubar/
 │   └── Assets.xcassets/                 # App icon, accent color
 ├── UsageMenubarTests/
 │   ├── CreditsCheckerTests.swift        # API, retry, fractional balance, keychain tests
-│   ├── ClaudeUsageClientTests.swift     # Usage decoding, token refresh, retry, credential store
+│   ├── ClaudeUsageClientTests.swift     # Usage decoding, read-only credential store, retry
 │   └── VersionFormatterTests.swift      # Version formatting tests
 ├── .github/workflows/
 │   └── release.yml                      # Build + release on push to master
@@ -168,7 +168,7 @@ usage-menubar/
 6. **State**: `ViewModel` owns the balance, loading/error state, balance history (for the sparkline), refresh task (cancellable to prevent races), and the refresh interval, and is shared between the menu bar item and the popover.
 7. **Notifications**: When the balance crosses below 10 credits — or is already below 10 on the first successful fetch — `ViewModel` posts a local `UNUserNotification`. Permission is requested only once.
 8. **Agent app**: `LSUIElement=true` in `Info.plist` makes the app a background agent — no dock icon, no main window.
-9. **Claude usage**: `ClaudeUsageClient` reads Claude Code's OAuth credentials (its `Claude Code-credentials` Keychain item via `/usr/bin/security`, falling back to `~/.claude/.credentials.json`), refreshes the access token when it has expired, and fetches `GET https://api.anthropic.com/api/oauth/usage` with `Authorization: Bearer …` and `anthropic-beta: oauth-2025-04-20`. It is an actor so that overlapping refreshes (timer, manual click, wake) join a single in-flight token exchange — the endpoint rotates the refresh token, and rotating it twice would sign Claude Code out. Missing credentials are reported as "not configured" rather than as an error, and the popover hides the section.
+9. **Claude usage**: `ClaudeUsageClient` reads Claude Code's OAuth credentials (its `Claude Code-credentials` Keychain item via `/usr/bin/security`, falling back to `~/.claude/.credentials.json`) and fetches `GET https://api.anthropic.com/api/oauth/usage` with `Authorization: Bearer` and `anthropic-beta: oauth-2025-04-20`. It is strictly read-only — it never refreshes the token and never writes credentials back. The token endpoint rotates the refresh token, so an app that also refreshed would race the CLI and sign the user out of their own terminal. When the token is spent (401/403), the app says so and points at `claude`; the next fetch (every 1–5 min, credentials re-read each time) picks up whatever the CLI refreshed on its own. Missing credentials are reported as "not configured" rather than as an error, and the popover hides the section.
 10. **Independent fetches**: `ViewModel.refresh()` runs the Hyper and Claude requests concurrently with `async let`. Neither can fail, stall, or be unconfigured in a way that affects the other.
 11. **No sandbox**: Reading credentials that belong to another app means spawning `/usr/bin/security` and reading a file in the user's home directory, neither of which the App Sandbox permits. The app is distributed ad-hoc signed via Homebrew rather than through the App Store, where the sandbox would be mandatory.
 

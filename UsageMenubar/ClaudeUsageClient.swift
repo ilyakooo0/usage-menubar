@@ -154,45 +154,32 @@ private enum ISO8601 {
 
 // MARK: - Credentials
 
-/// The OAuth credentials the Claude Code CLI owns. The key names are Claude Code's,
-/// not ours — this is its blob, and we only ever read it and rotate its tokens.
-struct ClaudeOAuthCredentials: Codable, Equatable {
-    var claudeAiOauth: OAuthToken
+/// The subset of Claude Code's OAuth blob this app reads. The key names are Claude
+/// Code's, not ours — and reading is *all* we do with them.
+///
+/// Deliberately models neither `refreshToken` nor `expiresAt`. Both existed only to
+/// serve a token refresh, and refreshing is precisely what this app must never do: the
+/// token endpoint rotates the refresh token, so an app refreshing behind the CLI's back
+/// leaves the CLI holding a token the server has already retired — signing the user out
+/// of their own terminal. Not modelling the fields is the cheapest way to keep it that
+/// way. Every field Claude Code stores that isn't named here is simply ignored.
+struct ClaudeOAuthCredentials: Decodable, Equatable {
+    let claudeAiOauth: OAuthToken
 
-    struct OAuthToken: Codable, Equatable {
-        var accessToken: String
-        var refreshToken: String
-        /// Epoch milliseconds.
-        var expiresAt: Int64
-        var scopes: [String]?
+    struct OAuthToken: Decodable, Equatable {
+        let accessToken: String
+        let scopes: [String]?
         /// `"pro"`, `"max"`, `"team"`, …
-        var subscriptionType: String?
-        var rateLimitTier: String?
+        let subscriptionType: String?
+        let rateLimitTier: String?
     }
 }
 
-/// Where credentials were read from, so a rotated token is written back to the same
-/// place. Writing to the other one would leave Claude Code holding a refresh token
-/// the server has already retired — i.e. would sign the user out of their own CLI.
-enum ClaudeCredentialSource: Equatable {
-    case keychain(account: String)
-    case file(URL)
-}
-
-/// Credentials together with where they came from.
-struct StoredClaudeCredentials: Equatable {
-    var credentials: ClaudeOAuthCredentials
-    var source: ClaudeCredentialSource
-}
-
-/// Reads — and, after a token refresh, writes back — the credentials Claude Code owns.
+/// Reads the credentials Claude Code owns. Read-only by design — there is no `save`,
+/// because the CLI is the only thing allowed to rotate these tokens.
 /// Injectable so tests never go near the real Keychain or the real credentials file.
 protocol ClaudeCredentialStoring {
-    func load() -> StoredClaudeCredentials?
-
-    /// Best effort: failing to persist a refreshed token is not worth failing the
-    /// fetch over, and the next launch will simply refresh again.
-    func save(_ stored: StoredClaudeCredentials)
+    func load() -> ClaudeOAuthCredentials?
 }
 
 /// The real store: Claude Code's login-Keychain item, falling back to
@@ -223,101 +210,14 @@ struct ClaudeCodeCredentialStore: ClaudeCredentialStoring {
         self.credentialsFile = credentialsFile
     }
 
-    func load() -> StoredClaudeCredentials? {
+    func load() -> ClaudeOAuthCredentials? {
         if let json = Self.runSecurity(["find-generic-password", "-s", keychainService, "-w"]),
            let credentials = Self.decode(Data(json.utf8)) {
-            return StoredClaudeCredentials(
-                credentials: credentials,
-                source: .keychain(account: keychainAccount())
-            )
+            return credentials
         }
 
-        guard let data = try? Data(contentsOf: credentialsFile),
-              let credentials = Self.decode(data) else { return nil }
-
-        return StoredClaudeCredentials(credentials: credentials, source: .file(credentialsFile))
-    }
-
-    func save(_ stored: StoredClaudeCredentials) {
-        guard let json = rotatedJSON(for: stored) else { return }
-
-        switch stored.source {
-        case .keychain(let account):
-            _ = Self.runSecurity([
-                "add-generic-password",
-                "-U",  // update the existing item rather than adding a second one
-                "-s", keychainService,
-                "-a", account,
-                "-w", json,
-            ])
-
-        case .file(let url):
-            guard let data = json.data(using: .utf8) else { return }
-            try? data.write(to: url, options: .atomic)
-            // An atomic write replaces the file, so the 0600 mode has to be reapplied.
-            try? FileManager.default.setAttributes(
-                [.posixPermissions: 0o600],
-                ofItemAtPath: url.path
-            )
-        }
-    }
-
-    /// The stored blob with only the three token fields rotated.
-    ///
-    /// Patches the raw JSON rather than re-encoding `ClaudeOAuthCredentials`, because
-    /// a round-trip through our own type would silently drop any field Anthropic adds
-    /// to the blob that we don't model — and this is the file the user's CLI logs in
-    /// with. Re-encoding is the fallback for when the raw blob can't be read back.
-    private func rotatedJSON(for stored: StoredClaudeCredentials) -> String? {
-        let token = stored.credentials.claudeAiOauth
-
-        if let raw = rawJSON(from: stored.source),
-           let parsed = try? JSONSerialization.jsonObject(with: raw),
-           var object = parsed as? [String: Any],
-           var oauth = object["claudeAiOauth"] as? [String: Any] {
-            oauth["accessToken"] = token.accessToken
-            oauth["refreshToken"] = token.refreshToken
-            oauth["expiresAt"] = token.expiresAt
-            object["claudeAiOauth"] = oauth
-
-            if let patched = try? JSONSerialization.data(withJSONObject: object),
-               let json = String(data: patched, encoding: .utf8) {
-                return json
-            }
-        }
-
-        guard let encoded = try? JSONEncoder().encode(stored.credentials) else { return nil }
-        return String(data: encoded, encoding: .utf8)
-    }
-
-    private func rawJSON(from source: ClaudeCredentialSource) -> Data? {
-        switch source {
-        case .keychain:
-            return Self.runSecurity(["find-generic-password", "-s", keychainService, "-w"])
-                .map { Data($0.utf8) }
-        case .file(let url):
-            return try? Data(contentsOf: url)
-        }
-    }
-
-    /// The account on Claude Code's Keychain item, so a write-back updates that item
-    /// instead of adding a second one under a different account.
-    private func keychainAccount() -> String {
-        guard let output = Self.runSecurity(["find-generic-password", "-s", keychainService]) else {
-            return NSUserName()
-        }
-
-        // The attribute dump spells the account as: "acct"<blob>="someone"
-        for line in output.split(separator: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard trimmed.hasPrefix("\"acct\""),
-                  let range = trimmed.range(of: #"="[^"]+"#, options: .regularExpression)
-            else { continue }
-            // The match starts at `="` and stops before the closing quote.
-            return String(trimmed[range].dropFirst(2))
-        }
-
-        return NSUserName()
+        guard let data = try? Data(contentsOf: credentialsFile) else { return nil }
+        return Self.decode(data)
     }
 
     private static func decode(_ data: Data) -> ClaudeOAuthCredentials? {
@@ -363,8 +263,11 @@ enum ClaudeUsageError: LocalizedError, Equatable {
     /// Claude Code has never signed in here. Not an error the user needs to see — the
     /// popover just leaves the section out.
     case noCredentials
+
+    /// The token the CLI last stored has expired or been revoked. The app cannot fix
+    /// this itself — only the CLI may mint a new one — so the message sends the user
+    /// there.
     case invalidCredentials
-    case tokenRefreshFailed
     case requestFailed(String)
     case decodingFailed(String)
 
@@ -374,8 +277,6 @@ enum ClaudeUsageError: LocalizedError, Equatable {
             return "No Claude Code credentials found. Run `claude` in a terminal to sign in."
         case .invalidCredentials:
             return "Claude sign-in expired. Run `claude` in a terminal to sign in again."
-        case .tokenRefreshFailed:
-            return "Could not refresh Claude credentials. Run `claude` in a terminal to sign in again."
         case .requestFailed(let message):
             return "Claude request failed: \(message)"
         case .decodingFailed(let message):
@@ -399,32 +300,29 @@ protocol ClaudeUsageChecking {
 
 // MARK: - Client
 
-/// Client for Claude Code's subscription usage API, authenticating with the OAuth
-/// credentials the CLI already stores on this machine.
+/// Client for Claude Code's subscription usage API, authenticating with whatever OAuth
+/// access token the CLI has most recently stored on this machine.
 ///
-/// An actor rather than a plain client, because the refresh path mutates state the
-/// user's CLI depends on: the token endpoint rotates the refresh token, so two
-/// concurrent refreshes would leave one of them holding a token the server has
-/// already retired. Overlapping fetches (timer, manual click, wake) instead join a
-/// single in-flight refresh.
+/// **A passenger, never a driver.** It reads the CLI's token and spends it as-is. It
+/// never refreshes: the token endpoint *rotates* the refresh token, and the CLI refreshes
+/// on its own schedule, so an app that also refreshed would race it — whichever of the two
+/// went second would present a refresh token the server had already retired, and the user
+/// would find themselves signed out of their own terminal. That bug is not worth a usage
+/// readout. When the token is spent, we say so and point at `claude`.
+///
+/// Credentials are re-read on every fetch (the app polls every 1–5 minutes), so a token
+/// the CLI refreshes is picked up on the next tick without the app lifting a finger.
+///
+/// Still an actor: it holds no mutable state now that the refresh is gone, but the
+/// overlapping fetches (timer, manual click, wake) share one instance, and an actor keeps
+/// that sharing trivially safe.
 actor ClaudeUsageClient: ClaudeUsageChecking {
     static let usageEndpoint = URL(string: "https://api.anthropic.com/api/oauth/usage")!
-    static let tokenEndpoint = URL(string: "https://platform.claude.com/v1/oauth/token")!
 
-    /// Claude Code's public OAuth client id, and the scopes it signs in with.
-    static let clientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
-    static let scope = "user:inference user:profile user:sessions:claude_code"
-
-    /// Cloudflare fronts the token endpoint and answers 403 `browser_signature_banned`
-    /// to anything without a browser User-Agent.
+    /// Cloudflare fronts the API and answers 403 `browser_signature_banned` to anything
+    /// without a browser User-Agent.
     static let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
         + "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
-
-    /// Refresh this far ahead of the stated expiry rather than racing it.
-    static let expiryBuffer: TimeInterval = 60
-
-    /// Used when the token endpoint omits `expires_in`.
-    static let defaultTokenLifetime: TimeInterval = 8 * 60 * 60
 
     /// Retries *after* the initial attempt, so at most 3 requests per call.
     static let maxRetries = 2
@@ -452,24 +350,17 @@ actor ClaudeUsageClient: ClaudeUsageChecking {
     private let session: URLSession
     private let store: ClaudeCredentialStoring
     private let retryBaseDelay: Duration
-    private let now: @Sendable () -> Date
-
-    /// The refresh currently in flight, if any. See `refreshCredentials(from:)`.
-    private var inFlightRefresh: Task<StoredClaudeCredentials, Error>?
 
     /// - Parameters:
     ///   - retryBaseDelay: Delay before the first retry; doubles on each subsequent
     ///     one (2s, then 4s). Injectable so tests need not wait in real time.
-    ///   - now: The current instant. Injectable so tests can drive token expiry.
     init(
         session: URLSession? = nil,
         store: ClaudeCredentialStoring = ClaudeCodeCredentialStore(),
-        retryBaseDelay: Duration = .seconds(2),
-        now: @escaping @Sendable () -> Date = { Date() }
+        retryBaseDelay: Duration = .seconds(2)
     ) {
         self.store = store
         self.retryBaseDelay = retryBaseDelay
-        self.now = now
         if let session {
             self.session = session
         } else {
@@ -480,42 +371,25 @@ actor ClaudeUsageClient: ClaudeUsageChecking {
         }
     }
 
-    /// Fetches current usage, refreshing the OAuth token first if it has expired.
+    /// Fetches current usage with the CLI's current access token, exactly as stored.
+    ///
+    /// The token is not checked for expiry and not refreshed on rejection — see the type
+    /// comment. A spent token surfaces as `.invalidCredentials`, which asks the user to
+    /// run `claude`; doing so has the CLI mint a fresh token, which the next fetch picks
+    /// up on its own.
     ///
     /// - Throws: `ClaudeUsageError`. `.noCredentials` means Claude Code was never
     ///   signed in here, which callers should treat as "nothing to show" rather than
     ///   as a failure.
     func fetchUsage() async throws -> ClaudeUsageReport {
-        guard let stored = store.load() else { throw ClaudeUsageError.noCredentials }
+        guard let credentials = store.load() else { throw ClaudeUsageError.noCredentials }
 
-        var current = stored
-        var didRefresh = false
-        if isExpired(stored.credentials) {
-            current = try await refreshCredentials(from: stored)
-            didRefresh = true
-        }
-
-        do {
-            return try await report(with: current)
-        } catch ClaudeUsageError.invalidCredentials where !didRefresh {
-            // A token can be revoked server-side well before its stated expiry, so a
-            // rejection is worth one refresh and one retry.
-            guard let refreshed = try? await refreshCredentials(from: current) else {
-                // A failed refresh (Cloudflare, a retired refresh token) says less
-                // than the rejection that sent us here, so surface that instead.
-                throw ClaudeUsageError.invalidCredentials
-            }
-            return try await report(with: refreshed)
-        }
-    }
-
-    // MARK: - Usage Request
-
-    private func report(with stored: StoredClaudeCredentials) async throws -> ClaudeUsageReport {
-        let token = stored.credentials.claudeAiOauth
+        let token = credentials.claudeAiOauth
         let usage = try await requestUsage(token: token.accessToken)
         return ClaudeUsageReport(usage: usage, subscriptionType: token.subscriptionType)
     }
+
+    // MARK: - Usage Request
 
     private func requestUsage(token: String) async throws -> ClaudeUsage {
         var request = URLRequest(url: Self.usageEndpoint, cachePolicy: .reloadIgnoringLocalCacheData)
@@ -532,101 +406,6 @@ actor ClaudeUsageClient: ClaudeUsageChecking {
         } catch {
             throw ClaudeUsageError.decodingFailed(error.localizedDescription)
         }
-    }
-
-    // MARK: - Token Refresh
-
-    /// Exchanges the refresh token for a fresh access token and persists the result.
-    ///
-    /// Callers join whatever refresh is already running rather than starting a second
-    /// one, and the exchange itself runs in an unstructured task so that a cancelled
-    /// caller — the view model cancels the previous refresh whenever a new one starts
-    /// — can never abandon a rotation half-done, with the new refresh token neither
-    /// used nor written back.
-    private func refreshCredentials(from stored: StoredClaudeCredentials) async throws -> StoredClaudeCredentials {
-        if let existing = inFlightRefresh {
-            return try await existing.value
-        }
-
-        let task = Task { () throws -> StoredClaudeCredentials in
-            let response = try await self.requestTokenRefresh(
-                refreshToken: stored.credentials.claudeAiOauth.refreshToken
-            )
-
-            var refreshed = stored
-            refreshed.credentials.claudeAiOauth.accessToken = response.accessToken
-            if let rotated = response.refreshToken {
-                refreshed.credentials.claudeAiOauth.refreshToken = rotated
-            }
-            let lifetime = response.expiresIn.map(TimeInterval.init) ?? Self.defaultTokenLifetime
-            refreshed.credentials.claudeAiOauth.expiresAt =
-                Int64((self.now().timeIntervalSince1970 + lifetime) * 1000)
-
-            self.store.save(refreshed)
-            return refreshed
-        }
-        // Only the task's creator ever clears the slot, so a joiner resuming late can
-        // never wipe out a refresh that started after it.
-        inFlightRefresh = task
-
-        do {
-            let refreshed = try await task.value
-            inFlightRefresh = nil
-            return refreshed
-        } catch {
-            inFlightRefresh = nil
-            throw error
-        }
-    }
-
-    /// Posts the refresh grant as JSON, then — for token endpoints that reject a JSON
-    /// body — retries the same exchange form-encoded before giving up.
-    private func requestTokenRefresh(refreshToken: String) async throws -> TokenRefreshResponse {
-        let parameters = [
-            "grant_type": "refresh_token",
-            "refresh_token": refreshToken,
-            "client_id": Self.clientID,
-            "scope": Self.scope,
-        ]
-
-        if let response = await tokenRefreshAttempt(parameters: parameters, formEncoded: false) {
-            return response
-        }
-        if let response = await tokenRefreshAttempt(parameters: parameters, formEncoded: true) {
-            return response
-        }
-        throw ClaudeUsageError.tokenRefreshFailed
-    }
-
-    /// One refresh exchange in one encoding. Returns `nil` rather than throwing, so the
-    /// caller can fall through to the other encoding.
-    private func tokenRefreshAttempt(
-        parameters: [String: String],
-        formEncoded: Bool
-    ) async -> TokenRefreshResponse? {
-        var request = URLRequest(url: Self.tokenEndpoint)
-        request.httpMethod = "POST"
-        request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-
-        if formEncoded {
-            request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-            request.httpBody = Self.formURLEncoded(parameters).data(using: .utf8)
-        } else {
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try? JSONSerialization.data(withJSONObject: parameters)
-        }
-
-        guard let data = try? await send(request) else { return nil }
-        return try? JSONDecoder().decode(TokenRefreshResponse.self, from: data)
-    }
-
-    /// Whether the access token is spent, or close enough that using it would be a race.
-    private func isExpired(_ credentials: ClaudeOAuthCredentials) -> Bool {
-        let expiry = Date(
-            timeIntervalSince1970: TimeInterval(credentials.claudeAiOauth.expiresAt) / 1000
-        )
-        return expiry.timeIntervalSince(now()) <= Self.expiryBuffer
     }
 
     // MARK: - Transport
@@ -689,39 +468,9 @@ actor ClaudeUsageClient: ClaudeUsageChecking {
         }
     }
 
-    /// Encodes parameters as an `application/x-www-form-urlencoded` body. Percent-encodes
-    /// against RFC 3986's unreserved set, so the spaces and colons in the scope don't
-    /// travel raw.
-    private static func formURLEncoded(_ parameters: [String: String]) -> String {
-        var allowed = CharacterSet.alphanumerics
-        allowed.insert(charactersIn: "-._~")
-
-        return parameters.map { key, value in
-            let encodedKey = key.addingPercentEncoding(withAllowedCharacters: allowed) ?? key
-            let encodedValue = value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
-            return "\(encodedKey)=\(encodedValue)"
-        }
-        .joined(separator: "&")
-    }
-
     /// A failed attempt, carrying the error to surface plus whether retrying is worthwhile.
     private struct AttemptFailure: Error {
         let underlying: ClaudeUsageError
         let isRetryable: Bool
-    }
-}
-
-/// The token endpoint's answer to a refresh grant.
-struct TokenRefreshResponse: Decodable, Equatable {
-    let accessToken: String
-    let refreshToken: String?
-
-    /// Seconds. Omitted by some deployments, in which case the caller assumes a default.
-    let expiresIn: Int?
-
-    private enum CodingKeys: String, CodingKey {
-        case accessToken = "access_token"
-        case refreshToken = "refresh_token"
-        case expiresIn = "expires_in"
     }
 }

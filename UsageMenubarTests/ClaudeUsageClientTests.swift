@@ -2,8 +2,8 @@ import XCTest
 import Foundation
 @testable import UsageMenubar
 
-/// The instant every test pretends it is. Injected into the client, so token expiry is
-/// a decision the test makes rather than a race against the wall clock.
+/// The instant the countdown tests reckon from, so "3h 20m" is a fact rather than a race
+/// against the wall clock.
 private let fixedNow = Date(timeIntervalSince1970: 1_700_000_000)
 
 final class ClaudeUsageClientTests: XCTestCase {
@@ -33,32 +33,22 @@ final class ClaudeUsageClientTests: XCTestCase {
         return ClaudeUsageClient(
             session: URLSession(configuration: config),
             store: store,
-            retryBaseDelay: retryBaseDelay,
-            now: { fixedNow }
+            retryBaseDelay: retryBaseDelay
         )
     }
 
     private func credentials(
         accessToken: String = "access-1",
-        refreshToken: String = "refresh-1",
-        expiresAt: Date = fixedNow.addingTimeInterval(3600),
         subscriptionType: String? = "max"
     ) -> ClaudeOAuthCredentials {
         ClaudeOAuthCredentials(
             claudeAiOauth: .init(
                 accessToken: accessToken,
-                refreshToken: refreshToken,
-                expiresAt: Int64(expiresAt.timeIntervalSince1970 * 1000),
                 scopes: ["user:inference"],
                 subscriptionType: subscriptionType,
                 rateLimitTier: nil
             )
         )
-    }
-
-    /// Credentials whose access token is already spent, so a fetch has to refresh first.
-    private func expiredCredentials() -> ClaudeOAuthCredentials {
-        credentials(expiresAt: fixedNow.addingTimeInterval(-1))
     }
 
     private func usageJSON(fiveHour: Int = 68, sevenDay: Int = 41) -> Data {
@@ -68,21 +58,6 @@ final class ClaudeUsageClientTests: XCTestCase {
           "seven_day": {"utilization": \(sevenDay), "resets_at": "2023-11-20T23:53:20.000Z"}
         }
         """.utf8)
-    }
-
-    private func tokenJSON(
-        accessToken: String = "access-2",
-        refreshToken: String? = "refresh-2",
-        expiresIn: Int? = 3600
-    ) -> Data {
-        var fields = [#""access_token": "\#(accessToken)""#]
-        if let refreshToken { fields.append(#""refresh_token": "\#(refreshToken)""#) }
-        if let expiresIn { fields.append(#""expires_in": \#(expiresIn)"#) }
-        return Data("{\(fields.joined(separator: ", "))}".utf8)
-    }
-
-    private func requests(to url: URL) -> [URLRequest] {
-        StubURLProtocol.recordedRequests.filter { $0.url == url }
     }
 
     // MARK: - Usage decoding
@@ -256,222 +231,59 @@ final class ClaudeUsageClientTests: XCTestCase {
         XCTAssertEqual(StubURLProtocol.requestCount, 0)
     }
 
-    func testValidTokenIsUsedWithoutRefreshing() async throws {
+    func testTheStoredTokenIsSpentExactlyAsItIs() async throws {
         let store = FakeClaudeCredentialStore(credentials: credentials())
         StubURLProtocol.enqueue(.status(200, usageJSON()))
 
         _ = try await makeClient(store: store).fetchUsage()
 
+        // One request, to the usage endpoint. No token endpoint, no grant, no rotation:
+        // refreshing behind the CLI's back is what signed the user out to begin with.
         XCTAssertEqual(StubURLProtocol.requestCount, 1)
-        XCTAssertTrue(requests(to: ClaudeUsageClient.tokenEndpoint).isEmpty)
-        XCTAssertTrue(store.savedCredentials.isEmpty, "Nothing was rotated, so nothing to write back")
+        XCTAssertEqual(StubURLProtocol.recordedRequests[0].url, ClaudeUsageClient.usageEndpoint)
+        XCTAssertEqual(StubURLProtocol.recordedRequests[0].httpMethod, "GET")
     }
 
-    // MARK: - Token refresh
-
-    func testExpiredTokenIsRefreshedBeforeTheUsageRequest() async throws {
-        let store = FakeClaudeCredentialStore(credentials: expiredCredentials())
-        StubURLProtocol.enqueue(
-            .status(200, tokenJSON(accessToken: "access-2")),
-            .status(200, usageJSON())
-        )
-
-        let report = try await makeClient(store: store).fetchUsage()
-
-        XCTAssertEqual(report.usage.fiveHour?.utilization, 68)
-        XCTAssertEqual(StubURLProtocol.requestCount, 2)
-
-        let recorded = StubURLProtocol.recordedRequests
-        XCTAssertEqual(recorded[0].url, ClaudeUsageClient.tokenEndpoint)
-        XCTAssertEqual(recorded[0].httpMethod, "POST")
-        XCTAssertEqual(recorded[1].url, ClaudeUsageClient.usageEndpoint)
-        XCTAssertEqual(
-            recorded[1].value(forHTTPHeaderField: "Authorization"),
-            "Bearer access-2",
-            "The usage request has to carry the refreshed token, not the spent one"
-        )
-    }
-
-    func testRefreshRotatesAndPersistsTheCredentials() async throws {
-        let store = FakeClaudeCredentialStore(credentials: expiredCredentials())
-        StubURLProtocol.enqueue(
-            .status(200, tokenJSON(accessToken: "access-2", refreshToken: "refresh-2", expiresIn: 3600)),
-            .status(200, usageJSON())
-        )
-
-        _ = try await makeClient(store: store).fetchUsage()
-
-        let saved = try XCTUnwrap(store.savedCredentials.last)
-        let token = saved.credentials.claudeAiOauth
-        XCTAssertEqual(token.accessToken, "access-2")
-        XCTAssertEqual(
-            token.refreshToken,
-            "refresh-2",
-            "The server rotated the refresh token; failing to store it would sign Claude Code out"
-        )
-        XCTAssertEqual(token.expiresAt, Int64((fixedNow.timeIntervalSince1970 + 3600) * 1000))
-        XCTAssertEqual(saved.source, .keychain(account: "tester"), "Written back where it was read from")
-    }
-
-    func testRefreshKeepsTheOldRefreshTokenWhenTheServerDoesNotRotateIt() async throws {
-        let store = FakeClaudeCredentialStore(credentials: expiredCredentials())
-        StubURLProtocol.enqueue(
-            .status(200, tokenJSON(accessToken: "access-2", refreshToken: nil)),
-            .status(200, usageJSON())
-        )
-
-        _ = try await makeClient(store: store).fetchUsage()
-
-        let saved = try XCTUnwrap(store.savedCredentials.last)
-        XCTAssertEqual(saved.credentials.claudeAiOauth.refreshToken, "refresh-1")
-    }
-
-    func testRefreshWithoutExpiresInAssumesEightHours() async throws {
-        let store = FakeClaudeCredentialStore(credentials: expiredCredentials())
-        StubURLProtocol.enqueue(
-            .status(200, tokenJSON(accessToken: "access-2", expiresIn: nil)),
-            .status(200, usageJSON())
-        )
-
-        _ = try await makeClient(store: store).fetchUsage()
-
-        let saved = try XCTUnwrap(store.savedCredentials.last)
-        XCTAssertEqual(
-            saved.credentials.claudeAiOauth.expiresAt,
-            Int64((fixedNow.timeIntervalSince1970 + 8 * 3600) * 1000)
-        )
-    }
-
-    func testRefreshSendsTheGrant() async throws {
-        let store = FakeClaudeCredentialStore(credentials: expiredCredentials())
-        StubURLProtocol.enqueue(.status(200, tokenJSON()), .status(200, usageJSON()))
-
-        _ = try await makeClient(store: store).fetchUsage()
-
-        let body = try XCTUnwrap(StubURLProtocol.recordedBodies.first ?? nil)
-        let grant = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: String])
-        XCTAssertEqual(grant["grant_type"], "refresh_token")
-        XCTAssertEqual(grant["refresh_token"], "refresh-1")
-        XCTAssertEqual(grant["client_id"], ClaudeUsageClient.clientID)
-        XCTAssertEqual(grant["scope"], ClaudeUsageClient.scope)
-    }
-
-    func testRefreshFallsBackToFormEncoding() async throws {
-        let store = FakeClaudeCredentialStore(credentials: expiredCredentials())
-        StubURLProtocol.enqueue(
-            .status(400, Data()),                        // the JSON body is rejected
-            .status(200, tokenJSON(accessToken: "access-2")),
-            .status(200, usageJSON())
-        )
-
-        _ = try await makeClient(store: store).fetchUsage()
-
-        XCTAssertEqual(StubURLProtocol.requestCount, 3)
-        let contentTypes = StubURLProtocol.recordedRequests.prefix(2).map {
-            $0.value(forHTTPHeaderField: "Content-Type")
-        }
-        XCTAssertEqual(contentTypes, ["application/json", "application/x-www-form-urlencoded"])
-
-        let form = try XCTUnwrap(StubURLProtocol.recordedBodies[1].flatMap { String(data: $0, encoding: .utf8) })
-        XCTAssertTrue(form.contains("grant_type=refresh_token"), "Got: \(form)")
-        XCTAssertTrue(form.contains("refresh_token=refresh-1"), "Got: \(form)")
-        XCTAssertTrue(
-            form.contains("user%3Ainference"),
-            "The colons in the scope have to be percent-encoded, not sent raw. Got: \(form)"
-        )
-    }
-
-    func testRefreshFailureThrowsTokenRefreshFailed() async {
-        let store = FakeClaudeCredentialStore(credentials: expiredCredentials())
-        StubURLProtocol.enqueue(.status(400, Data()))  // repeats, so both encodings fail
-
-        do {
-            _ = try await makeClient(store: store).fetchUsage()
-            XCTFail("Expected tokenRefreshFailed error")
-        } catch ClaudeUsageError.tokenRefreshFailed {
-            // expected
-        } catch {
-            XCTFail("Unexpected error: \(error)")
-        }
-
-        // Both encodings tried, and no usage request made with a token we never got.
-        XCTAssertEqual(StubURLProtocol.requestCount, 2)
-        XCTAssertTrue(requests(to: ClaudeUsageClient.usageEndpoint).isEmpty)
-    }
-
-    func testConcurrentFetchesShareASingleRefresh() async throws {
-        // Two refreshes at once would each spend the refresh token, and whichever
-        // finished second would be left holding one the server had already retired.
-        let store = FakeClaudeCredentialStore(credentials: expiredCredentials())
-        StubURLProtocol.enqueue(.status(200, tokenJSON()), .status(200, usageJSON()))
+    func testCredentialsAreReReadOnEveryFetch() async throws {
+        // The CLI refreshes on its own schedule and we never do, so the only way to see
+        // a new token is to go back to the store each time. Caching one would strand the
+        // app on a token the CLI has long since replaced.
+        let store = FakeClaudeCredentialStore(credentials: credentials(accessToken: "access-1"))
+        StubURLProtocol.enqueue(.status(200, usageJSON()), .status(200, usageJSON()))
 
         let client = makeClient(store: store)
-        async let first = client.fetchUsage()
-        async let second = client.fetchUsage()
-        _ = try await (first, second)
+        _ = try await client.fetchUsage()
 
-        XCTAssertEqual(requests(to: ClaudeUsageClient.tokenEndpoint).count, 1)
-        XCTAssertEqual(requests(to: ClaudeUsageClient.usageEndpoint).count, 2)
-        XCTAssertEqual(store.savedCredentials.count, 1)
+        store.replace(with: credentials(accessToken: "access-2"))
+        _ = try await client.fetchUsage()
+
+        XCTAssertEqual(store.loadCount, 2)
+        let sent = StubURLProtocol.recordedRequests.map { $0.value(forHTTPHeaderField: "Authorization") }
+        XCTAssertEqual(sent, ["Bearer access-1", "Bearer access-2"])
     }
 
     // MARK: - Rejected tokens
 
-    func testRejectedTokenIsRefreshedOnceThenRetried() async throws {
-        // A token can be revoked server-side well before its stated expiry.
+    func testRejectedTokenSurfacesInvalidCredentialsWithoutRefreshing() async {
+        // A spent or revoked token is the user's to fix by running `claude`. The app
+        // attempting the refresh itself is the bug this whole client is shaped around.
         let store = FakeClaudeCredentialStore(credentials: credentials())
-        StubURLProtocol.enqueue(
-            .status(401, Data()),
-            .status(200, tokenJSON(accessToken: "access-2")),
-            .status(200, usageJSON())
-        )
+        StubURLProtocol.enqueue(.status(401, Data()))
 
-        let report = try await makeClient(store: store).fetchUsage()
+        do {
+            _ = try await makeClient(store: store).fetchUsage()
+            XCTFail("Expected invalidCredentials error")
+        } catch ClaudeUsageError.invalidCredentials {
+            // expected
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
 
-        XCTAssertEqual(report.usage.fiveHour?.utilization, 68)
-        XCTAssertEqual(StubURLProtocol.requestCount, 3)
         XCTAssertEqual(
-            StubURLProtocol.recordedRequests[2].value(forHTTPHeaderField: "Authorization"),
-            "Bearer access-2"
+            StubURLProtocol.requestCount,
+            1,
+            "A 401 must end the fetch — no refresh, and no retry of the request either"
         )
-    }
-
-    func testRepeatedRejectionSurfacesInvalidCredentials() async {
-        let store = FakeClaudeCredentialStore(credentials: credentials())
-        StubURLProtocol.enqueue(
-            .status(401, Data()),
-            .status(200, tokenJSON(accessToken: "access-2")),
-            .status(401, Data())
-        )
-
-        do {
-            _ = try await makeClient(store: store).fetchUsage()
-            XCTFail("Expected invalidCredentials error")
-        } catch ClaudeUsageError.invalidCredentials {
-            // expected
-        } catch {
-            XCTFail("Unexpected error: \(error)")
-        }
-
-        // One refresh, and no attempt at a second: it plainly isn't the token.
-        XCTAssertEqual(StubURLProtocol.requestCount, 3)
-        XCTAssertEqual(requests(to: ClaudeUsageClient.tokenEndpoint).count, 1)
-    }
-
-    func testFailedRefreshAfterRejectionSurfacesTheRejection() async {
-        // "Couldn't refresh" says less than "the server rejected your token", and both
-        // point at the same fix, so the rejection is the more useful of the two.
-        let store = FakeClaudeCredentialStore(credentials: credentials())
-        StubURLProtocol.enqueue(.status(401, Data()), .status(403, Data()))
-
-        do {
-            _ = try await makeClient(store: store).fetchUsage()
-            XCTFail("Expected invalidCredentials error")
-        } catch ClaudeUsageError.invalidCredentials {
-            // expected
-        } catch {
-            XCTFail("Unexpected error: \(error)")
-        }
     }
 
     func testForbiddenIsTreatedAsARejectedToken() async {
@@ -486,6 +298,15 @@ final class ClaudeUsageClientTests: XCTestCase {
         } catch {
             XCTFail("Unexpected error: \(error)")
         }
+
+        XCTAssertEqual(StubURLProtocol.requestCount, 1)
+    }
+
+    func testTheInvalidCredentialsMessagePointsAtTheCLI() {
+        // The app can't mint a token, so the only useful thing it can say is where one
+        // comes from.
+        let message = ClaudeUsageError.invalidCredentials.errorDescription
+        XCTAssertEqual(message, "Claude sign-in expired. Run `claude` in a terminal to sign in again.")
     }
 
     // MARK: - Retries
@@ -606,7 +427,8 @@ final class ClaudeCodeCredentialStoreTests: XCTestCase {
 
     private var directory: URL!
 
-    /// A credentials blob carrying two fields we deliberately don't model.
+    /// A credentials blob as Claude Code actually writes it: the two token fields we no
+    /// longer model, and two more we never did.
     private let credentialsJSON = """
     {
       "claudeAiOauth": {
@@ -651,12 +473,11 @@ final class ClaudeCodeCredentialStoreTests: XCTestCase {
     func testReadsCredentialsFromTheFileWhenTheKeychainHasNothing() throws {
         let file = try writeCredentialsFile()
 
-        let stored = try XCTUnwrap(makeStore(file: file).load())
+        let credentials = try XCTUnwrap(makeStore(file: file).load())
 
-        XCTAssertEqual(stored.credentials.claudeAiOauth.accessToken, "access-1")
-        XCTAssertEqual(stored.credentials.claudeAiOauth.refreshToken, "refresh-1")
-        XCTAssertEqual(stored.credentials.claudeAiOauth.subscriptionType, "max")
-        XCTAssertEqual(stored.source, .file(file))
+        XCTAssertEqual(credentials.claudeAiOauth.accessToken, "access-1")
+        XCTAssertEqual(credentials.claudeAiOauth.subscriptionType, "max")
+        XCTAssertEqual(credentials.claudeAiOauth.scopes, ["user:inference", "user:profile"])
     }
 
     func testReturnsNilWhenThereIsNeitherAKeychainItemNorAFile() {
@@ -672,81 +493,65 @@ final class ClaudeCodeCredentialStoreTests: XCTestCase {
         XCTAssertNil(makeStore(file: file).load())
     }
 
-    func testWriteBackRotatesTheTokensAndKeepsEverythingElse() throws {
-        let file = try writeCredentialsFile()
-        let store = makeStore(file: file)
+    func testABlobWithoutTheFieldsWeDroppedStillLoads() throws {
+        // `refreshToken` and `expiresAt` are no longer modelled, so their absence must
+        // not fail the decode — nor must their presence, above.
+        let file = directory.appendingPathComponent(".credentials.json")
+        try Data(#"{"claudeAiOauth": {"accessToken": "access-1"}}"#.utf8).write(to: file)
 
-        var stored = try XCTUnwrap(store.load())
-        stored.credentials.claudeAiOauth.accessToken = "access-2"
-        stored.credentials.claudeAiOauth.refreshToken = "refresh-2"
-        stored.credentials.claudeAiOauth.expiresAt = 4_100_000_000_000
-        store.save(stored)
+        let credentials = try XCTUnwrap(makeStore(file: file).load())
 
-        let written = try XCTUnwrap(
-            try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any]
-        )
-        let oauth = try XCTUnwrap(written["claudeAiOauth"] as? [String: Any])
-
-        XCTAssertEqual(oauth["accessToken"] as? String, "access-2")
-        XCTAssertEqual(oauth["refreshToken"] as? String, "refresh-2")
-        XCTAssertEqual((oauth["expiresAt"] as? NSNumber)?.int64Value, 4_100_000_000_000)
-
-        // This is the file the user's CLI signs in with. Round-tripping it through our
-        // own type would drop the fields we don't model, so the write patches the raw
-        // JSON instead — and these two have to survive it.
-        XCTAssertEqual(oauth["somethingWeDoNotModel"] as? String, "keep me")
-        XCTAssertEqual(written["anotherTopLevelKey"] as? String, "keep me too")
-        XCTAssertEqual(oauth["subscriptionType"] as? String, "max")
+        XCTAssertEqual(credentials.claudeAiOauth.accessToken, "access-1")
+        XCTAssertNil(credentials.claudeAiOauth.subscriptionType)
     }
 
-    func testWriteBackLeavesTheFileReadableOnlyByItsOwner() throws {
+    func testLoadingLeavesTheCredentialsFileByteForByteUntouched() throws {
+        // The regression guard for the bug this store was built around: the app used to
+        // write a rotated token back here, racing the CLI's own refresh and signing the
+        // user out of their terminal. It must now be a reader and nothing else.
         let file = try writeCredentialsFile()
-        let store = makeStore(file: file)
+        let before = try Data(contentsOf: file)
 
-        let stored = try XCTUnwrap(store.load())
-        store.save(stored)
+        _ = makeStore(file: file).load()
 
-        let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
-        XCTAssertEqual(
-            (attributes[.posixPermissions] as? NSNumber)?.int16Value,
-            0o600,
-            "An atomic write replaces the file, so the mode has to be reapplied"
-        )
+        XCTAssertEqual(try Data(contentsOf: file), before)
     }
 }
 
 // MARK: - Fake credential store
 
 /// An in-memory `ClaudeCredentialStoring`. Never goes near the Keychain or the disk.
+///
+/// It cannot write, because the protocol no longer can: the CLI is the only thing that
+/// may rotate these tokens. `replace(with:)` is the test standing in for the CLI having
+/// done exactly that behind the app's back.
 final class FakeClaudeCredentialStore: ClaudeCredentialStoring {
     private let lock = NSLock()
-    private var current: StoredClaudeCredentials?
-    private var writes: [StoredClaudeCredentials] = []
+    private var current: ClaudeOAuthCredentials?
+    private var loads = 0
 
-    init(
-        credentials: ClaudeOAuthCredentials?,
-        source: ClaudeCredentialSource = .keychain(account: "tester")
-    ) {
-        current = credentials.map { StoredClaudeCredentials(credentials: $0, source: source) }
+    init(credentials: ClaudeOAuthCredentials?) {
+        current = credentials
     }
 
-    /// Every write-back the client has made, oldest first.
-    var savedCredentials: [StoredClaudeCredentials] {
+    /// How many times the client has gone back to the store — it should be once per fetch.
+    var loadCount: Int {
         lock.lock()
         defer { lock.unlock() }
-        return writes
+        return loads
     }
 
-    func load() -> StoredClaudeCredentials? {
+    /// Stands in for the CLI refreshing its own token between two fetches.
+    func replace(with credentials: ClaudeOAuthCredentials?) {
         lock.lock()
         defer { lock.unlock() }
+        current = credentials
+    }
+
+    func load() -> ClaudeOAuthCredentials? {
+        lock.lock()
+        defer { lock.unlock() }
+        loads += 1
         return current
-    }
-
-    func save(_ stored: StoredClaudeCredentials) {
-        lock.lock()
-        defer { lock.unlock() }
-        current = stored
-        writes.append(stored)
     }
 }
