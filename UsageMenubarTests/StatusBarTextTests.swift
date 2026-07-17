@@ -17,7 +17,7 @@ final class StatusBarTextTests: XCTestCase {
             claudeFiveHourPercent: 62, claudeSevenDayPercent: 8,
             zaiFiveHourPercent: nil, zaiWeeklyPercent: nil
         )
-        XCTAssertEqual(title, "⚡42 · 🕐62% · 📅8%")
+        XCTAssertEqual(title, "⚡42 · 🕐62% 📅8%")
     }
 
     func testHyperOnly() {
@@ -37,7 +37,7 @@ final class StatusBarTextTests: XCTestCase {
             claudeFiveHourPercent: 62, claudeSevenDayPercent: 8,
             zaiFiveHourPercent: nil, zaiWeeklyPercent: nil
         )
-        XCTAssertEqual(title, "🕐62% · 📅8%")
+        XCTAssertEqual(title, "🕐62% 📅8%")
     }
 
     func testLoadingWithNothingToShow() {
@@ -80,7 +80,7 @@ final class StatusBarTextTests: XCTestCase {
             claudeFiveHourPercent: 62, claudeSevenDayPercent: 8,
             zaiFiveHourPercent: nil, zaiWeeklyPercent: nil
         )
-        XCTAssertEqual(title, "⚡42 · 🕐62% · 📅8%")
+        XCTAssertEqual(title, "⚡42 · 🕐62% 📅8%")
     }
 
     func testZeroPercentIsShownRatherThanOmitted() {
@@ -154,7 +154,7 @@ final class StatusBarTextTests: XCTestCase {
             claudeFiveHourPercent: 62, claudeSevenDayPercent: 8,
             zaiFiveHourPercent: nil, zaiWeeklyPercent: nil
         )
-        XCTAssertEqual(title, "🕐62% · 📅8%")
+        XCTAssertEqual(title, "🕐62% 📅8%")
     }
 
     // MARK: - z.ai in Title
@@ -186,7 +186,7 @@ final class StatusBarTextTests: XCTestCase {
             claudeFiveHourPercent: 62, claudeSevenDayPercent: 8,
             zaiFiveHourPercent: 12, zaiWeeklyPercent: nil
         )
-        XCTAssertEqual(title, "🕐62% · 📅8% · 🤖12%")
+        XCTAssertEqual(title, "🕐62% 📅8% · 🤖12%")
     }
 
     func testAllThreeServices() {
@@ -196,7 +196,7 @@ final class StatusBarTextTests: XCTestCase {
             claudeFiveHourPercent: 62, claudeSevenDayPercent: 8,
             zaiFiveHourPercent: 12, zaiWeeklyPercent: 3
         )
-        XCTAssertEqual(title, "⚡42 · 🕐62% · 📅8% · 🤖12% · 📆3%")
+        XCTAssertEqual(title, "⚡42 · 🕐62% 📅8% · 🤖12% 📆3%")
     }
 
     func testZaiZeroIsOmitted() {
@@ -238,7 +238,7 @@ final class StatusBarTextTests: XCTestCase {
             claudeFiveHourPercent: nil, claudeSevenDayPercent: nil,
             zaiFiveHourPercent: 12, zaiWeeklyPercent: 3
         )
-        XCTAssertEqual(title, "🤖12% · 📆3%")
+        XCTAssertEqual(title, "🤖12% 📆3%")
     }
 
     func testZaiWeeklyZeroIsOmitted() {

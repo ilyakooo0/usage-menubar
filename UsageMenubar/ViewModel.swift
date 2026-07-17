@@ -237,11 +237,12 @@ final class ViewModel: ObservableObject {
         balanceFormatter.string(from: NSNumber(value: value)) ?? "\(value)"
     }
 
-    /// The text to show in the menu bar: `⚡{balance}` (Hyper), `🕐{percent}%` (Claude
-    /// 5-hour), `📅{percent}%` (Claude 7-day), `🤖{percent}%` (z.ai 5-hour), and
-    /// `📆{percent}%` (z.ai weekly) — each omitted when absent or at 0%, and entirely
-    /// absent when the service is not configured. An unconfigured service produces no
-    /// placeholder in the menu bar.
+    /// The text to show in the menu bar. Each configured provider contributes a
+    /// segment; segments are separated by ` · ` (middle dot). Within a segment,
+    /// windows are separated by a space. An unconfigured service produces no
+    /// segment — no placeholder, no icon.
+    ///
+    /// Example: `⚡42 · 🕐62% 📅8% · 🤖12% 📆3%`
     ///
     /// Takes its values as parameters rather than reading the properties: `@Published`
     /// publishes in `willSet`, so a Combine subscriber that called back into the view
@@ -255,28 +256,43 @@ final class ViewModel: ObservableObject {
         zaiFiveHourPercent: Int?,
         zaiWeeklyPercent: Int?
     ) -> String {
-        var parts: [String] = []
+        var segments: [String] = []
+
+        // Hyper
         if hyperConfigured, let balance = balance {
-            parts.append("⚡\(formatBalance(balance))")
+            segments.append("⚡\(formatBalance(balance))")
         }
+
+        // Claude — windows joined by space within the segment
+        var claudeWindows: [String] = []
         if let fiveHour = claudeFiveHourPercent, fiveHour > 0 {
-            parts.append("🕐\(fiveHour)%")
+            claudeWindows.append("🕐\(fiveHour)%")
         }
         if let sevenDay = claudeSevenDayPercent, sevenDay > 0 {
-            parts.append("📅\(sevenDay)%")
+            claudeWindows.append("📅\(sevenDay)%")
         }
+        if !claudeWindows.isEmpty {
+            segments.append(claudeWindows.joined(separator: " "))
+        }
+
+        // z.ai — windows joined by space within the segment
+        var zaiWindows: [String] = []
         if let zaiFiveHour = zaiFiveHourPercent, zaiFiveHour > 0 {
-            parts.append("🤖\(zaiFiveHour)%")
+            zaiWindows.append("🤖\(zaiFiveHour)%")
         }
         if let zaiWeekly = zaiWeeklyPercent, zaiWeekly > 0 {
-            parts.append("📆\(zaiWeekly)%")
+            zaiWindows.append("📆\(zaiWeekly)%")
         }
-        if parts.isEmpty {
+        if !zaiWindows.isEmpty {
+            segments.append(zaiWindows.joined(separator: " "))
+        }
+
+        if segments.isEmpty {
             // No service is configured or has anything to show. While loading,
             // show an ellipsis; otherwise the title is empty.
             return isLoading ? "…" : ""
         }
-        return parts.joined(separator: " · ")
+        return segments.joined(separator: " · ")
     }
 
     /// The text to show in the menu bar for the current state.
