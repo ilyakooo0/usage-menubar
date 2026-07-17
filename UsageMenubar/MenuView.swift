@@ -410,11 +410,23 @@ struct MenuView: View {
             // Peak hours notice.
             zaiPeakHours
 
-            // Sparkline for the z.ai 5-hour % history.
-            sparkline(
-                values: viewModel.zaiSparklineValues,
-                color: Self.usageColor(zaiFiveHourPercent ?? 0)
-            )
+            // Sparkline for the z.ai 5-hour % history, with an orange tint
+            // when currently in peak hours.
+            if viewModel.zaiSparklineValues.count >= 2 {
+                Sparkline(
+                    values: viewModel.zaiSparklineValues,
+                    color: Self.usageColor(zaiFiveHourPercent ?? 0)
+                )
+                .frame(height: 26)
+                .padding(.top, 4)
+                .transition(.opacity)
+                .background(
+                    ViewModel.zaiInPeakHours
+                        ? RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .fill(Color.orange.opacity(0.08))
+                        : nil
+                )
+            }
         }
     }
 
@@ -445,7 +457,7 @@ struct MenuView: View {
     /// z.ai peak hours: 14:00–18:00 CST (UTC+8), i.e. 06:00–10:00 UTC.
     /// Limits are most likely to bind during this window.
     private var zaiPeakHours: some View {
-        let inPeak = Self.isZaiPeakHoursNow
+        let inPeak = ViewModel.zaiInPeakHours
 
         return HStack(spacing: 6) {
             Circle()
@@ -456,12 +468,6 @@ struct MenuView: View {
                 .font(Self.footnoteFont)
                 .foregroundColor(inPeak ? .orange : .secondary)
         }
-    }
-
-    /// Whether the current UTC time falls within z.ai's peak hours (06:00–10:00 UTC).
-    private static var isZaiPeakHoursNow: Bool {
-        let hour = Calendar(identifier: .gregorian).component(.hour, from: Date())
-        return hour >= 6 && hour < 10
     }
 
     /// Formats the time until a z.ai window resets, e.g. "3h 20m".

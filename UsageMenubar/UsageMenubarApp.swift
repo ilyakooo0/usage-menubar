@@ -89,7 +89,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 claudeFiveHourPercent: fiveHour,
                 claudeSevenDayPercent: sevenDay,
                 zaiFiveHourPercent: zaiFiveHour,
-                zaiWeeklyPercent: zaiWeekly
+                zaiWeeklyPercent: zaiWeekly,
+                zaiInPeakHours: ViewModel.zaiInPeakHours
             )
         }
         .removeDuplicates()

@@ -15,7 +15,8 @@ final class StatusBarTextTests: XCTestCase {
             balance: 42, isLoading: false,
             hyperConfigured: true,
             claudeFiveHourPercent: 62, claudeSevenDayPercent: 8,
-            zaiFiveHourPercent: nil, zaiWeeklyPercent: nil
+            zaiFiveHourPercent: nil, zaiWeeklyPercent: nil,
+            zaiInPeakHours: false
         )
         XCTAssertEqual(title, "⚡42 · \u{1F172}62% 8%")
     }
@@ -25,7 +26,8 @@ final class StatusBarTextTests: XCTestCase {
             balance: 42, isLoading: false,
             hyperConfigured: true,
             claudeFiveHourPercent: nil, claudeSevenDayPercent: nil,
-            zaiFiveHourPercent: nil, zaiWeeklyPercent: nil
+            zaiFiveHourPercent: nil, zaiWeeklyPercent: nil,
+            zaiInPeakHours: false
         )
         XCTAssertEqual(title, "⚡42")
     }
@@ -35,7 +37,8 @@ final class StatusBarTextTests: XCTestCase {
             balance: nil, isLoading: false,
             hyperConfigured: false,
             claudeFiveHourPercent: 62, claudeSevenDayPercent: 8,
-            zaiFiveHourPercent: nil, zaiWeeklyPercent: nil
+            zaiFiveHourPercent: nil, zaiWeeklyPercent: nil,
+            zaiInPeakHours: false
         )
         XCTAssertEqual(title, "\u{1F172}62% 8%")
     }
@@ -45,7 +48,8 @@ final class StatusBarTextTests: XCTestCase {
             balance: nil, isLoading: true,
             hyperConfigured: false,
             claudeFiveHourPercent: nil, claudeSevenDayPercent: nil,
-            zaiFiveHourPercent: nil, zaiWeeklyPercent: nil
+            zaiFiveHourPercent: nil, zaiWeeklyPercent: nil,
+            zaiInPeakHours: false
         )
         XCTAssertEqual(title, "…")
     }
@@ -55,7 +59,8 @@ final class StatusBarTextTests: XCTestCase {
             balance: nil, isLoading: false,
             hyperConfigured: false,
             claudeFiveHourPercent: nil, claudeSevenDayPercent: nil,
-            zaiFiveHourPercent: nil, zaiWeeklyPercent: nil
+            zaiFiveHourPercent: nil, zaiWeeklyPercent: nil,
+            zaiInPeakHours: false
         )
         XCTAssertEqual(title, "")
     }
@@ -68,7 +73,8 @@ final class StatusBarTextTests: XCTestCase {
             balance: nil, isLoading: true,
             hyperConfigured: false,
             claudeFiveHourPercent: 62, claudeSevenDayPercent: nil,
-            zaiFiveHourPercent: nil, zaiWeeklyPercent: nil
+            zaiFiveHourPercent: nil, zaiWeeklyPercent: nil,
+            zaiInPeakHours: false
         )
         XCTAssertEqual(title, "\u{1F172}62%")
     }
@@ -78,7 +84,8 @@ final class StatusBarTextTests: XCTestCase {
             balance: 42, isLoading: true,
             hyperConfigured: true,
             claudeFiveHourPercent: 62, claudeSevenDayPercent: 8,
-            zaiFiveHourPercent: nil, zaiWeeklyPercent: nil
+            zaiFiveHourPercent: nil, zaiWeeklyPercent: nil,
+            zaiInPeakHours: false
         )
         XCTAssertEqual(title, "⚡42 · \u{1F172}62% 8%")
     }
@@ -88,7 +95,8 @@ final class StatusBarTextTests: XCTestCase {
             balance: 42, isLoading: false,
             hyperConfigured: true,
             claudeFiveHourPercent: 0, claudeSevenDayPercent: 8,
-            zaiFiveHourPercent: nil, zaiWeeklyPercent: nil
+            zaiFiveHourPercent: nil, zaiWeeklyPercent: nil,
+            zaiInPeakHours: false
         )
         XCTAssertEqual(title, "⚡42 · \u{1F172}8%")
     }
@@ -98,7 +106,8 @@ final class StatusBarTextTests: XCTestCase {
             balance: 42, isLoading: false,
             hyperConfigured: true,
             claudeFiveHourPercent: 0, claudeSevenDayPercent: 0,
-            zaiFiveHourPercent: nil, zaiWeeklyPercent: nil
+            zaiFiveHourPercent: nil, zaiWeeklyPercent: nil,
+            zaiInPeakHours: false
         )
         XCTAssertEqual(title, "⚡42")
     }
@@ -108,7 +117,8 @@ final class StatusBarTextTests: XCTestCase {
             balance: nil, isLoading: false,
             hyperConfigured: false,
             claudeFiveHourPercent: 62, claudeSevenDayPercent: nil,
-            zaiFiveHourPercent: nil, zaiWeeklyPercent: nil
+            zaiFiveHourPercent: nil, zaiWeeklyPercent: nil,
+            zaiInPeakHours: false
         )
         XCTAssertEqual(title, "\u{1F172}62%")
     }
@@ -118,7 +128,8 @@ final class StatusBarTextTests: XCTestCase {
             balance: nil, isLoading: false,
             hyperConfigured: false,
             claudeFiveHourPercent: nil, claudeSevenDayPercent: 8,
-            zaiFiveHourPercent: nil, zaiWeeklyPercent: nil
+            zaiFiveHourPercent: nil, zaiWeeklyPercent: nil,
+            zaiInPeakHours: false
         )
         XCTAssertEqual(title, "\u{1F172}8%")
     }
@@ -132,7 +143,8 @@ final class StatusBarTextTests: XCTestCase {
             balance: 42, isLoading: false,
             hyperConfigured: false,
             claudeFiveHourPercent: nil, claudeSevenDayPercent: nil,
-            zaiFiveHourPercent: nil, zaiWeeklyPercent: nil
+            zaiFiveHourPercent: nil, zaiWeeklyPercent: nil,
+            zaiInPeakHours: false
         )
         XCTAssertEqual(title, "")
     }
@@ -142,7 +154,8 @@ final class StatusBarTextTests: XCTestCase {
             balance: nil, isLoading: true,
             hyperConfigured: false,
             claudeFiveHourPercent: nil, claudeSevenDayPercent: nil,
-            zaiFiveHourPercent: nil, zaiWeeklyPercent: nil
+            zaiFiveHourPercent: nil, zaiWeeklyPercent: nil,
+            zaiInPeakHours: false
         )
         XCTAssertEqual(title, "…")
     }
@@ -152,7 +165,8 @@ final class StatusBarTextTests: XCTestCase {
             balance: nil, isLoading: false,
             hyperConfigured: false,
             claudeFiveHourPercent: 62, claudeSevenDayPercent: 8,
-            zaiFiveHourPercent: nil, zaiWeeklyPercent: nil
+            zaiFiveHourPercent: nil, zaiWeeklyPercent: nil,
+            zaiInPeakHours: false
         )
         XCTAssertEqual(title, "\u{1F172}62% 8%")
     }
@@ -164,7 +178,8 @@ final class StatusBarTextTests: XCTestCase {
             balance: nil, isLoading: false,
             hyperConfigured: false,
             claudeFiveHourPercent: nil, claudeSevenDayPercent: nil,
-            zaiFiveHourPercent: 12, zaiWeeklyPercent: nil
+            zaiFiveHourPercent: 12, zaiWeeklyPercent: nil,
+            zaiInPeakHours: false
         )
         XCTAssertEqual(title, "\u{1F149}12%")
     }
@@ -174,7 +189,8 @@ final class StatusBarTextTests: XCTestCase {
             balance: 42, isLoading: false,
             hyperConfigured: true,
             claudeFiveHourPercent: nil, claudeSevenDayPercent: nil,
-            zaiFiveHourPercent: 12, zaiWeeklyPercent: nil
+            zaiFiveHourPercent: 12, zaiWeeklyPercent: nil,
+            zaiInPeakHours: false
         )
         XCTAssertEqual(title, "⚡42 · \u{1F149}12%")
     }
@@ -184,7 +200,8 @@ final class StatusBarTextTests: XCTestCase {
             balance: nil, isLoading: false,
             hyperConfigured: false,
             claudeFiveHourPercent: 62, claudeSevenDayPercent: 8,
-            zaiFiveHourPercent: 12, zaiWeeklyPercent: nil
+            zaiFiveHourPercent: 12, zaiWeeklyPercent: nil,
+            zaiInPeakHours: false
         )
         XCTAssertEqual(title, "\u{1F172}62% 8% · \u{1F149}12%")
     }
@@ -194,7 +211,8 @@ final class StatusBarTextTests: XCTestCase {
             balance: 42, isLoading: false,
             hyperConfigured: true,
             claudeFiveHourPercent: 62, claudeSevenDayPercent: 8,
-            zaiFiveHourPercent: 12, zaiWeeklyPercent: 3
+            zaiFiveHourPercent: 12, zaiWeeklyPercent: 3,
+            zaiInPeakHours: false
         )
         XCTAssertEqual(title, "⚡42 · \u{1F172}62% 8% · \u{1F149}12% 3%")
     }
@@ -204,7 +222,8 @@ final class StatusBarTextTests: XCTestCase {
             balance: 42, isLoading: false,
             hyperConfigured: true,
             claudeFiveHourPercent: nil, claudeSevenDayPercent: nil,
-            zaiFiveHourPercent: 0, zaiWeeklyPercent: 0
+            zaiFiveHourPercent: 0, zaiWeeklyPercent: 0,
+            zaiInPeakHours: false
         )
         XCTAssertEqual(title, "⚡42")
     }
@@ -214,7 +233,8 @@ final class StatusBarTextTests: XCTestCase {
             balance: nil, isLoading: true,
             hyperConfigured: false,
             claudeFiveHourPercent: nil, claudeSevenDayPercent: nil,
-            zaiFiveHourPercent: 12, zaiWeeklyPercent: nil
+            zaiFiveHourPercent: 12, zaiWeeklyPercent: nil,
+            zaiInPeakHours: false
         )
         XCTAssertEqual(title, "\u{1F149}12%")
     }
@@ -226,7 +246,8 @@ final class StatusBarTextTests: XCTestCase {
             balance: nil, isLoading: false,
             hyperConfigured: false,
             claudeFiveHourPercent: nil, claudeSevenDayPercent: nil,
-            zaiFiveHourPercent: nil, zaiWeeklyPercent: 3
+            zaiFiveHourPercent: nil, zaiWeeklyPercent: 3,
+            zaiInPeakHours: false
         )
         XCTAssertEqual(title, "\u{1F149}3%")
     }
@@ -236,7 +257,8 @@ final class StatusBarTextTests: XCTestCase {
             balance: nil, isLoading: false,
             hyperConfigured: false,
             claudeFiveHourPercent: nil, claudeSevenDayPercent: nil,
-            zaiFiveHourPercent: 12, zaiWeeklyPercent: 3
+            zaiFiveHourPercent: 12, zaiWeeklyPercent: 3,
+            zaiInPeakHours: false
         )
         XCTAssertEqual(title, "\u{1F149}12% 3%")
     }
@@ -246,7 +268,8 @@ final class StatusBarTextTests: XCTestCase {
             balance: nil, isLoading: false,
             hyperConfigured: false,
             claudeFiveHourPercent: nil, claudeSevenDayPercent: nil,
-            zaiFiveHourPercent: 12, zaiWeeklyPercent: 0
+            zaiFiveHourPercent: 12, zaiWeeklyPercent: 0,
+            zaiInPeakHours: false
         )
         XCTAssertEqual(title, "\u{1F149}12%")
     }
@@ -256,9 +279,46 @@ final class StatusBarTextTests: XCTestCase {
             balance: nil, isLoading: true,
             hyperConfigured: false,
             claudeFiveHourPercent: nil, claudeSevenDayPercent: nil,
-            zaiFiveHourPercent: nil, zaiWeeklyPercent: 3
+            zaiFiveHourPercent: nil, zaiWeeklyPercent: 3,
+            zaiInPeakHours: false
         )
         XCTAssertEqual(title, "\u{1F149}3%")
+    }
+
+    // MARK: - z.ai Peak Hours
+
+    func testPeakHoursAddsDiamondToZaiSegment() {
+        let title = ViewModel.statusBarText(
+            balance: 42, isLoading: false,
+            hyperConfigured: true,
+            claudeFiveHourPercent: 62, claudeSevenDayPercent: 8,
+            zaiFiveHourPercent: 12, zaiWeeklyPercent: 3,
+            zaiInPeakHours: true
+        )
+        XCTAssertEqual(title, "⚡42 · \u{1F172}62% 8% · \u{1F149}12% 3%\u{1F536}")
+    }
+
+    func testPeakHoursWithZaiOnly() {
+        let title = ViewModel.statusBarText(
+            balance: nil, isLoading: false,
+            hyperConfigured: false,
+            claudeFiveHourPercent: nil, claudeSevenDayPercent: nil,
+            zaiFiveHourPercent: 12, zaiWeeklyPercent: nil,
+            zaiInPeakHours: true
+        )
+        XCTAssertEqual(title, "\u{1F149}12%\u{1F536}")
+    }
+
+    func testPeakHoursIgnoredWhenZaiNotConfigured() {
+        let title = ViewModel.statusBarText(
+            balance: 42, isLoading: false,
+            hyperConfigured: true,
+            claudeFiveHourPercent: 62, claudeSevenDayPercent: 8,
+            zaiFiveHourPercent: nil, zaiWeeklyPercent: nil,
+            zaiInPeakHours: true
+        )
+        // No z.ai segment, so peak marker has nothing to attach to.
+        XCTAssertEqual(title, "⚡42 · \u{1F172}62% 8%")
     }
 
     // MARK: - Claude Window Percentages

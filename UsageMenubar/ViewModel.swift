@@ -241,8 +241,9 @@ final class ViewModel: ObservableObject {
     /// segment prefixed with a provider emoji; segments are separated by ` · `
     /// (middle dot). Within a segment, windows are listed as bare percentages
     /// separated by spaces. An unconfigured service produces no segment.
+    /// When z.ai is in peak hours, a 🔶 marker is appended to the z.ai segment.
     ///
-    /// Example: `⚡42 · 🅲62% 8% · 🅉12% 3%`
+    /// Example: `⚡42 · 🅲62% 8% · 🅉12% 3%🔶`
     ///
     /// Takes its values as parameters rather than reading the properties: `@Published`
     /// publishes in `willSet`, so a Combine subscriber that called back into the view
@@ -254,7 +255,8 @@ final class ViewModel: ObservableObject {
         claudeFiveHourPercent: Int?,
         claudeSevenDayPercent: Int?,
         zaiFiveHourPercent: Int?,
-        zaiWeeklyPercent: Int?
+        zaiWeeklyPercent: Int?,
+        zaiInPeakHours: Bool
     ) -> String {
         var segments: [String] = []
 
@@ -284,7 +286,11 @@ final class ViewModel: ObservableObject {
             zaiWindows.append("\(zaiWeekly)%")
         }
         if !zaiWindows.isEmpty {
-            segments.append("🅉" + zaiWindows.joined(separator: " "))
+            var segment = "🅉" + zaiWindows.joined(separator: " ")
+            if zaiInPeakHours {
+                segment += "🔶"
+            }
+            segments.append(segment)
         }
 
         if segments.isEmpty {
@@ -304,8 +310,15 @@ final class ViewModel: ObservableObject {
             claudeFiveHourPercent: claudeFiveHourPercent,
             claudeSevenDayPercent: claudeSevenDayPercent,
             zaiFiveHourPercent: zaiFiveHourPercent,
-            zaiWeeklyPercent: zaiWeeklyPercent
+            zaiWeeklyPercent: zaiWeeklyPercent,
+            zaiInPeakHours: Self.zaiInPeakHours
         )
+    }
+
+    /// Whether z.ai is currently in peak hours (06:00–10:00 UTC).
+    static var zaiInPeakHours: Bool {
+        let hour = Calendar(identifier: .gregorian).component(.hour, from: Date())
+        return hour >= 6 && hour < 10
     }
 
     /// The formatted balance string for display in the popover.
