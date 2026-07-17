@@ -20,9 +20,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Combine cancellables for observing published changes.
     private var statusTextCancellable: AnyCancellable?
 
-    /// The site the "Open" menu item points at.
-    private static let websiteURL = URL(string: "https://hyper.charm.land")!
-
     // MARK: - Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -215,10 +212,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshItem.target = self
         menu.addItem(refreshItem)
 
-        let openItem = NSMenuItem(title: "Open hyper.charm.land", action: #selector(openWebsite(_:)), keyEquivalent: "")
-        openItem.target = self
-        menu.addItem(openItem)
-
         menu.addItem(.separator())
 
         let quitItem = NSMenuItem(title: "Quit UsageMenubar", action: #selector(quit(_:)), keyEquivalent: "q")
@@ -235,10 +228,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func refreshFromMenu(_ sender: Any?) {
         viewModel.refresh()
-    }
-
-    @objc private func openWebsite(_ sender: Any?) {
-        NSWorkspace.shared.open(Self.websiteURL)
     }
 
     @objc private func quit(_ sender: Any?) {
