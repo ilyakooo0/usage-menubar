@@ -10,8 +10,8 @@ extension Notification.Name {
     static let refreshIntervalDidChange = Notification.Name("com.ilyakooo0.usage-menubar.refreshIntervalDidChange")
 }
 
-/// The direction the balance has moved over the most recent history points.
-enum BalanceTrend {
+/// The direction a metric has moved over the most recent history points.
+enum MetricTrend {
     case increasing
     case decreasing
     case stable
@@ -29,10 +29,11 @@ enum BalanceTrend {
     }
 }
 
-/// A single balance observation.
-struct BalancePoint: Equatable {
+/// A single metric observation — used for Hyper balance, Claude 5-hour %,
+/// and z.ai 5-hour % alike.
+struct MetricPoint: Equatable {
     let date: Date
-    let balance: Int
+    let value: Int
 }
 
 /// How often the balance is refreshed. Lives outside `ViewModel` so the view and
@@ -111,8 +112,20 @@ final class ViewModel: ObservableObject {
     /// Brief "✓ Copied" confirmation shown after copying the balance.
     @Published var copiedConfirmation: Bool = false
 
+    /// Brief "✓ Copied" confirmation shown after copying the Claude percentage.
+    @Published var copiedClaudeConfirmation: Bool = false
+
+    /// Brief "✓ Copied" confirmation shown after copying the z.ai percentage.
+    @Published var copiedZaiConfirmation: Bool = false
+
     /// Successful balance observations from the last 24 hours, oldest first.
-    @Published private(set) var history: [BalancePoint] = []
+    @Published private(set) var history: [MetricPoint] = []
+
+    /// Successful Claude 5-hour % observations from the last 24 hours, oldest first.
+    @Published private(set) var claudeHistory: [MetricPoint] = []
+
+    /// Successful z.ai 5-hour % observations from the last 24 hours, oldest first.
+    @Published private(set) var zaiHistory: [MetricPoint] = []
 
     /// How often the balance is refreshed, in minutes. Persisted to `UserDefaults`;
     /// changing it posts `.refreshIntervalDidChange` so the app delegate can
@@ -163,12 +176,21 @@ final class ViewModel: ObservableObject {
     /// Resets `savedConfirmation`; same rationale as `copiedResetTask`.
     private var savedResetTask: Task<Void, Never>?
 
+    /// Resets `copiedClaudeConfirmation`; same rationale as `copiedResetTask`.
+    private var copiedClaudeResetTask: Task<Void, Never>?
+
+    /// Resets `copiedZaiConfirmation`; same rationale as `copiedResetTask`.
+    private var copiedZaiResetTask: Task<Void, Never>?
+
     // MARK: - History Configuration
 
     /// 24 hours at the shortest (1 minute) interval would overflow this, so the
     /// count cap and the age cutoff both apply; whichever bites first wins.
     private static let maxHistoryEntries = 300
     private static let historyWindow: TimeInterval = 24 * 60 * 60
+
+    /// The threshold above which a usage percentage triggers a notification.
+    private static let highUsageThreshold = 90
 
     init(
         checker: CreditsChecking = CreditsChecker(),
@@ -290,33 +312,69 @@ final class ViewModel: ObservableObject {
         return "Updated \(Self.relativeFormatter.localizedString(for: lastUpdated, relativeTo: Date()))"
     }
 
-    // MARK: - History
+    // MARK: - History (Hyper)
 
-    /// The last 24 hours of successful fetches, oldest first.
+    /// The last 24 hours of successful balance fetches, oldest first.
     var balanceHistory: [(date: Date, balance: Int)] {
-        history.map { (date: $0.date, balance: $0.balance) }
+        history.map { (date: $0.date, balance: $0.value) }
     }
 
     /// The direction of travel across the most recent handful of observations.
     /// `.unknown` until there are at least two points to compare.
-    var balanceTrend: BalanceTrend {
-        guard history.count >= 2 else { return .unknown }
-        let recent = history.suffix(5)
+    var balanceTrend: MetricTrend {
+        metricTrend(history)
+    }
+
+    /// The sparkline's data for the Hyper balance.
+    var balanceSparklineValues: [Int] {
+        history.map { $0.value }
+    }
+
+    // MARK: - History (Claude)
+
+    /// The last 24 hours of successful Claude 5-hour % fetches, oldest first.
+    var claudeSparklineValues: [Int] {
+        claudeHistory.map { $0.value }
+    }
+
+    /// The direction of travel for the Claude 5-hour %.
+    var claudeTrend: MetricTrend {
+        metricTrend(claudeHistory)
+    }
+
+    // MARK: - History (z.ai)
+
+    /// The last 24 hours of successful z.ai 5-hour % fetches, oldest first.
+    var zaiSparklineValues: [Int] {
+        zaiHistory.map { $0.value }
+    }
+
+    /// The direction of travel for the z.ai 5-hour %.
+    var zaiTrend: MetricTrend {
+        metricTrend(zaiHistory)
+    }
+
+    // MARK: - History Helpers
+
+    /// Computes the trend from a generic history array.
+    private func metricTrend(_ points: [MetricPoint]) -> MetricTrend {
+        guard points.count >= 2 else { return .unknown }
+        let recent = points.suffix(5)
         guard let first = recent.first, let last = recent.last else { return .unknown }
-        if last.balance > first.balance { return .increasing }
-        if last.balance < first.balance { return .decreasing }
+        if last.value > first.value { return .increasing }
+        if last.value < first.value { return .decreasing }
         return .stable
     }
 
     /// Appends an observation and drops anything older than 24 hours or beyond the cap.
-    private func recordHistory(balance: Int, at date: Date) {
-        history.append(BalancePoint(date: date, balance: balance))
+    private func recordMetric(_ value: Int, into array: inout [MetricPoint], at date: Date) {
+        array.append(MetricPoint(date: date, value: value))
 
         let cutoff = date.addingTimeInterval(-Self.historyWindow)
-        history.removeAll { $0.date < cutoff }
+        array.removeAll { $0.date < cutoff }
 
-        if history.count > Self.maxHistoryEntries {
-            history.removeFirst(history.count - Self.maxHistoryEntries)
+        if array.count > Self.maxHistoryEntries {
+            array.removeFirst(array.count - Self.maxHistoryEntries)
         }
     }
 
@@ -391,7 +449,7 @@ final class ViewModel: ObservableObject {
             errorMessage = nil
             let now = Date()
             lastUpdated = now
-            recordHistory(balance: newBalance, at: now)
+            recordMetric(newBalance, into: &history, at: now)
 
             // Low-balance notification: on threshold crossing (≥10 → <10)
             // OR on first successful fetch if already below threshold.
@@ -436,11 +494,29 @@ final class ViewModel: ObservableObject {
             claudeUsage = nil
             claudePlan = nil
             claudeError = nil
+            claudeHistory.removeAll()
 
         case .usage(let report):
+            // Capture the previous 5-hour % for threshold-crossing notification.
+            let previousPercent = claudeFiveHourPercent
             claudeUsage = report.usage
             claudePlan = report.subscriptionType
             claudeError = nil
+
+            // Record history and fire high-usage notification based on the 5-hour %.
+            if let percent = claudeFiveHourPercent {
+                let now = Date()
+                recordMetric(percent, into: &claudeHistory, at: now)
+
+                // High-usage notification: on threshold crossing (<90 → ≥90)
+                // OR on first successful fetch if already above threshold.
+                if let previous = previousPercent, previous < Self.highUsageThreshold,
+                   percent >= Self.highUsageThreshold {
+                    sendHighUsageNotification(provider: "Claude Code", percent: percent)
+                } else if previousPercent == nil, percent >= Self.highUsageThreshold {
+                    sendHighUsageNotification(provider: "Claude Code", percent: percent)
+                }
+            }
 
         case .failure(let message):
             // As with the balance: keep the last good numbers on screen and say what
@@ -509,10 +585,28 @@ final class ViewModel: ObservableObject {
         case .notConfigured:
             zaiUsage = nil
             zaiError = nil
+            zaiHistory.removeAll()
 
         case .usage(let report):
+            // Capture the previous 5-hour % for threshold-crossing notification.
+            let previousPercent = zaiFiveHourPercent
             zaiUsage = report
             zaiError = nil
+
+            // Record history and fire high-usage notification based on the 5-hour %.
+            if let percent = zaiFiveHourPercent {
+                let now = Date()
+                recordMetric(percent, into: &zaiHistory, at: now)
+
+                // High-usage notification: on threshold crossing (<90 → ≥90)
+                // OR on first successful fetch if already above threshold.
+                if let previous = previousPercent, previous < Self.highUsageThreshold,
+                   percent >= Self.highUsageThreshold {
+                    sendHighUsageNotification(provider: "z.ai Coding", percent: percent)
+                } else if previousPercent == nil, percent >= Self.highUsageThreshold {
+                    sendHighUsageNotification(provider: "z.ai Coding", percent: percent)
+                }
+            }
 
         case .failure(let message):
             // As with the balance and Claude: keep the last good numbers on screen
@@ -567,7 +661,41 @@ final class ViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Low Balance Notification
+    /// Copies the current Claude 5-hour percentage to the clipboard.
+    func copyClaudePercentToClipboard() {
+        guard let percent = claudeFiveHourPercent else { return }
+
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString("\(percent)%", forType: .string)
+
+        copiedClaudeConfirmation = true
+        copiedClaudeResetTask?.cancel()
+        copiedClaudeResetTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard !Task.isCancelled else { return }
+            copiedClaudeConfirmation = false
+        }
+    }
+
+    /// Copies the current z.ai 5-hour percentage to the clipboard.
+    func copyZaiPercentToClipboard() {
+        guard let percent = zaiFiveHourPercent else { return }
+
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString("\(percent)%", forType: .string)
+
+        copiedZaiConfirmation = true
+        copiedZaiResetTask?.cancel()
+        copiedZaiResetTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard !Task.isCancelled else { return }
+            copiedZaiConfirmation = false
+        }
+    }
+
+    // MARK: - Notifications
 
     private func sendLowBalanceNotification(balance: Int) {
         // Build the body here, on the main actor. `getNotificationSettings` calls back on
@@ -589,6 +717,29 @@ final class ViewModel: ObservableObject {
             // which updates the text without ever notifying the user again.
             let request = UNNotificationRequest(
                 identifier: "low-balance-alert-\(UUID().uuidString)",
+                content: content,
+                trigger: nil
+            )
+            center.add(request)
+        }
+    }
+
+    /// Sends a notification when a usage percentage crosses the high-usage threshold.
+    private func sendHighUsageNotification(provider: String, percent: Int) {
+        let body = "\(provider) 5-hour usage at \(percent)% — approaching limit"
+
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { settings in
+            guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else {
+                return
+            }
+            let content = UNMutableNotificationContent()
+            content.title = "High Usage Menubar"
+            content.body = body
+            content.sound = .default
+
+            let request = UNNotificationRequest(
+                identifier: "high-usage-alert-\(provider)-\(UUID().uuidString)",
                 content: content,
                 trigger: nil
             )
@@ -678,6 +829,7 @@ final class ViewModel: ObservableObject {
             if key != activeZaiAPIKey {
                 zaiUsage = nil
                 zaiError = nil
+                zaiHistory.removeAll()
             }
             // Show the trimmed key that was actually stored.
             zaiAPIKeyInput = key

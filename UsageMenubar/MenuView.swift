@@ -4,21 +4,15 @@ import SwiftUI
 struct MenuView: View {
     @ObservedObject var viewModel: ViewModel
 
-    /// Dims the balance while the pointer is over it, hinting that it is clickable.
-    @State private var isHoveringBalance = false
-
     private static let websiteURL = URL(string: "https://hyper.charm.land")!
     private static let zaiKeyURL = URL(string: "https://z.ai/manage-apikey/coding-plan/personal/my-plan")!
 
     // MARK: - Type Scale
 
-    /// One rounded family, sized so that the balance is the only large element and
-    /// everything else steps down from it — nothing competes with it for attention.
-    /// The Claude percentage is the one exception, and it is deliberately set well
-    /// below the balance so it reads as the second thing on the page, not the first.
-    /// Monospaced digits keep numbers from jittering as their digits change.
-    private static let heroFont = Font.system(size: 46, weight: .semibold, design: .rounded)
-        .monospacedDigit()
+    /// One rounded family, sized so that every provider's headline number reads at the
+    /// same weight. With three providers in the popover, the 26pt subhero is the right
+    /// scale — a 46pt hero would make the popover too tall. Monospaced digits keep
+    /// numbers from jittering as their digits change.
     private static let subheroFont = Font.system(size: 26, weight: .semibold, design: .rounded)
         .monospacedDigit()
     private static let sectionFont = Font.system(size: 12, weight: .semibold, design: .rounded)
@@ -28,7 +22,9 @@ struct MenuView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            hyper
+            if viewModel.hyperConfigured {
+                hyper
+            }
             if showsClaude {
                 serviceBreak
                 claude
@@ -51,10 +47,14 @@ struct MenuView: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .animation(.easeInOut(duration: 0.2), value: viewModel.savedConfirmation)
         .animation(.easeInOut(duration: 0.2), value: viewModel.copiedConfirmation)
+        .animation(.easeInOut(duration: 0.2), value: viewModel.copiedClaudeConfirmation)
+        .animation(.easeInOut(duration: 0.2), value: viewModel.copiedZaiConfirmation)
         .animation(.easeInOut(duration: 0.2), value: viewModel.errorMessage)
         .animation(.easeInOut(duration: 0.25), value: viewModel.balance)
         .animation(.easeInOut(duration: 0.25), value: viewModel.isLoading)
-        .animation(.easeInOut(duration: 0.3), value: historyValues.count)
+        .animation(.easeInOut(duration: 0.3), value: viewModel.balanceSparklineValues.count)
+        .animation(.easeInOut(duration: 0.3), value: viewModel.claudeSparklineValues.count)
+        .animation(.easeInOut(duration: 0.3), value: viewModel.zaiSparklineValues.count)
         .animation(.easeInOut(duration: 0.25), value: viewModel.claudeUsage)
         .animation(.easeInOut(duration: 0.2), value: viewModel.claudeError)
         .animation(.easeInOut(duration: 0.25), value: viewModel.zaiUsage)
@@ -66,15 +66,14 @@ struct MenuView: View {
         Divider().opacity(0.3)
     }
 
-    /// The rule between the two services. Wider than the others on purpose: Hyper and
-    /// Claude are two unrelated accounts, and the gap should say so before the headers do.
+    /// The rule between services. Wider than the others on purpose: the providers are
+    /// unrelated accounts, and the gap should say so before the headers do.
     private var serviceBreak: some View {
         hairline.padding(.vertical, 5)
     }
 
     /// A section header: an icon and a title, sized to match the "API Key" header below
-    /// so the popover reads as three sections rather than a hero with two appendices.
-    /// The icon is what tells the two services apart at a glance.
+    /// so the popover reads as three equal sections rather than a hero with appendages.
     private func sectionHeader(_ title: String, systemImage: String) -> some View {
         HStack(spacing: 5) {
             Image(systemName: systemImage)
@@ -85,111 +84,60 @@ struct MenuView: View {
         }
     }
 
-    // MARK: - Hyper
+    /// A reusable headline number row: the provider's main metric at subhero scale,
+    /// with emoji, color, trend arrow, and click-to-copy. The `caption` doubles as the
+    /// copy-confirmation slot so the layout doesn't shift.
+    private func headlineNumber(
+        text: String,
+        color: Color,
+        trend: MetricTrend,
+        copiedConfirmation: Bool,
+        captionText: String,
+        copyAction: @escaping () -> Void
+    ) -> some View {
+        VStack(spacing: 6) {
+            Button(action: copyAction) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(text)
+                        .font(Self.subheroFont)
+                        .foregroundColor(color)
+                        .contentTransition(.opacity)
 
-    /// The Hyper section: its header, then the balance as the popover's hero.
-    private var hyper: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            sectionHeader("Hyper Credits", systemImage: "bolt.fill")
+                    if let symbol = trend.symbolName {
+                        Image(systemName: symbol)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(.secondary)
+                            .transition(.opacity)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Click to copy")
 
-            hero
-        }
-    }
-
-    private var hero: some View {
-        VStack(spacing: 8) {
-            if viewModel.isLoading && viewModel.balance == nil {
-                PulsingBolt()
-                    .transition(.opacity)
-            } else if viewModel.balance == nil {
-                VStack(spacing: 6) {
-                    Text("⚡?")
-                        .font(Self.heroFont)
-                        .foregroundColor(.secondary)
-
-                    Text("Enter your API key below")
-                        .font(Self.captionFont)
+            // Caption doubles as copy confirmation so the layout doesn't shift.
+            Group {
+                if copiedConfirmation {
+                    Text("✓ Copied")
+                        .foregroundColor(.green)
+                } else {
+                    Text(captionText)
                         .foregroundColor(.secondary)
                 }
-                .transition(.opacity)
-            } else {
-                VStack(spacing: 6) {
-                    balanceNumber
-                    caption
-                    sparkline
-                }
-                .transition(.opacity)
             }
-
-            if let lastUpdatedText = viewModel.lastUpdatedText {
-                Text(lastUpdatedText)
-                    .font(Self.footnoteFont)
-                    .foregroundColor(.secondary)
-                    .transition(.opacity)
-            }
-
-            if let error = viewModel.errorMessage {
-                errorRow(error)
-                    .transition(.opacity)
-            }
+            .font(Self.captionFont)
         }
-        .frame(maxWidth: .infinity)
     }
 
-    /// The balance itself. Clicking it copies the raw number to the clipboard.
-    private var balanceNumber: some View {
-        Button(action: { viewModel.copyBalanceToClipboard() }) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(viewModel.formattedBalance)
-                    .font(Self.heroFont)
-                    .foregroundColor(viewModel.balanceColor)
-                    .contentTransition(.opacity)
-
-                if let symbol = viewModel.balanceTrend.symbolName {
-                    Image(systemName: symbol)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(.secondary)
-                        .transition(.opacity)
-                }
-            }
-            // Without this the hover area is only the glyphs themselves.
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(viewModel.balance == nil)
-        .help("Click to copy")
-        .opacity(isHoveringBalance && viewModel.balance != nil ? 0.65 : 1)
-        .onHover { isHoveringBalance = $0 }
-        .animation(.easeInOut(duration: 0.12), value: isHoveringBalance)
-    }
-
-    /// Doubles as the copy confirmation so the layout doesn't shift.
-    private var caption: some View {
-        Group {
-            if viewModel.copiedConfirmation {
-                Text("✓ Copied")
-                    .foregroundColor(.green)
-            } else {
-                Text("credits")
-                    .foregroundColor(.secondary)
-            }
-        }
-        .font(Self.captionFont)
-    }
-
+    /// A sparkline shown when there are at least 2 history points.
     @ViewBuilder
-    private var sparkline: some View {
-        if historyValues.count >= 2 {
-            Sparkline(values: historyValues, color: viewModel.balanceColor)
+    private func sparkline(values: [Int], color: Color) -> some View {
+        if values.count >= 2 {
+            Sparkline(values: values, color: color)
                 .frame(height: 26)
                 .padding(.top, 4)
                 .transition(.opacity)
         }
-    }
-
-    /// The sparkline's data. Key paths can't index tuple elements, so this stays a closure.
-    private var historyValues: [Int] {
-        viewModel.balanceHistory.map { $0.balance }
     }
 
     /// Errors read as a quiet inline notice rather than loose red text: an icon, the
@@ -216,6 +164,56 @@ struct MenuView: View {
         .padding(.top, 2)
     }
 
+    // MARK: - Hyper
+
+    /// Whether there is anything to say about Hyper. Nothing at all when Hyper isn't
+    /// configured — the section doesn't appear, same as Claude and z.ai.
+    private var showsHyper: Bool {
+        viewModel.hyperConfigured
+    }
+
+    /// The Hyper section: header, balance as a subhero number, caption, sparkline.
+    private var hyper: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionHeader("Hyper Credits", systemImage: "bolt.fill")
+
+            if viewModel.isLoading && viewModel.balance == nil {
+                Text("…")
+                    .font(Self.subheroFont)
+                    .foregroundColor(.secondary)
+            } else if let balance = viewModel.balance {
+                VStack(spacing: 8) {
+                    headlineNumber(
+                        text: "⚡ \(viewModel.formattedBalance)",
+                        color: viewModel.balanceColor,
+                        trend: viewModel.balanceTrend,
+                        copiedConfirmation: viewModel.copiedConfirmation,
+                        captionText: "credits",
+                        copyAction: { viewModel.copyBalanceToClipboard() }
+                    )
+
+                    sparkline(
+                        values: viewModel.balanceSparklineValues,
+                        color: viewModel.balanceColor
+                    )
+                }
+                .transition(.opacity)
+            }
+
+            if let lastUpdatedText = viewModel.lastUpdatedText {
+                Text(lastUpdatedText)
+                    .font(Self.footnoteFont)
+                    .foregroundColor(.secondary)
+                    .transition(.opacity)
+            }
+
+            if let error = viewModel.errorMessage {
+                errorRow(error)
+                    .transition(.opacity)
+            }
+        }
+    }
+
     // MARK: - Claude
 
     /// Whether there is anything to say about Claude. Nothing at all when Claude Code
@@ -227,8 +225,8 @@ struct MenuView: View {
         return false
     }
 
-    /// Claude Code's plan limits. The percentage leads, as the balance does above it,
-    /// with the individual windows underneath as quiet supporting detail.
+    /// Claude Code's plan limits. Same visual structure as Hyper and z.ai: a subhero
+    /// headline number, bars under every window, a sparkline, and error row.
     private var claude: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
@@ -255,23 +253,31 @@ struct MenuView: View {
 
     private func usageDetail(_ usage: ClaudeUsage) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            // The 5-hour window leads as the hero number, since it's the one
-            // most likely to bind and the one shown in the menu bar title.
+            // The 5-hour window leads as the headline number.
             if let fiveHour = usage.fiveHour {
                 let percent = Int(fiveHour.utilization.rounded())
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text("🕐 \(percent)%")
-                        .font(Self.subheroFont)
-                        .foregroundColor(Self.usageColor(percent))
-                        .contentTransition(.opacity)
+                VStack(spacing: 8) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        headlineNumber(
+                            text: "🕐 \(percent)%",
+                            color: Self.usageColor(percent),
+                            trend: viewModel.claudeTrend,
+                            copiedConfirmation: viewModel.copiedClaudeConfirmation,
+                            captionText: "5-hour usage",
+                            copyAction: { viewModel.copyClaudePercentToClipboard() }
+                        )
 
-                    Spacer(minLength: 0)
+                        Spacer(minLength: 0)
 
-                    if let resets = fiveHour.resetsInFormatted {
-                        Text("resets in \(resets)")
-                            .font(Self.footnoteFont)
-                            .foregroundColor(.secondary)
+                        if let resets = fiveHour.resetsInFormatted {
+                            Text("resets in \(resets)")
+                                .font(Self.footnoteFont)
+                                .foregroundColor(.secondary)
+                        }
                     }
+
+                    // Bar under the 5-hour window too, same as 7-day windows below.
+                    UsageBar(percent: percent, color: Self.usageColor(percent))
                 }
             }
 
@@ -285,6 +291,12 @@ struct MenuView: View {
                     window("7-day Opus", opus)
                 }
             }
+
+            // Sparkline for the Claude 5-hour % history.
+            sparkline(
+                values: viewModel.claudeSparklineValues,
+                color: Self.usageColor(claudeFiveHourPercent ?? 0)
+            )
         }
     }
 
@@ -310,6 +322,11 @@ struct MenuView: View {
         }
     }
 
+    /// The current Claude 5-hour percentage, or 0 if absent. Used for sparkline color.
+    private var claudeFiveHourPercent: Int? {
+        viewModel.claudeFiveHourPercent
+    }
+
     /// The balance colors read the other way round here, because for a limit more is
     /// worse: green with room to spare, yellow closing in, red nearly spent.
     private static func usageColor(_ percent: Int) -> Color {
@@ -329,8 +346,8 @@ struct MenuView: View {
         return false
     }
 
-    /// z.ai Coding Plan's quota limits. Same visual structure as the Claude section:
-    /// the 5-hour percentage leads as a subhero, the weekly quota sits underneath.
+    /// z.ai Coding Plan's quota limits. Same visual structure as Hyper and Claude:
+    /// a subhero headline number, bars under every window, a sparkline, and error row.
     private var zai: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
@@ -357,21 +374,30 @@ struct MenuView: View {
 
     private func zaiUsageDetail(_ usage: ZaiUsageReport) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            // The 5-hour window leads as the hero number, same as Claude's.
+            // The 5-hour window leads as the headline number.
             if let fiveHour = usage.fiveHourPercent {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text("🤖 \(fiveHour)%")
-                        .font(Self.subheroFont)
-                        .foregroundColor(Self.usageColor(fiveHour))
-                        .contentTransition(.opacity)
+                VStack(spacing: 8) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        headlineNumber(
+                            text: "🤖 \(fiveHour)%",
+                            color: Self.usageColor(fiveHour),
+                            trend: viewModel.zaiTrend,
+                            copiedConfirmation: viewModel.copiedZaiConfirmation,
+                            captionText: "5-hour usage",
+                            copyAction: { viewModel.copyZaiPercentToClipboard() }
+                        )
 
-                    Spacer(minLength: 0)
+                        Spacer(minLength: 0)
 
-                    if let resets = usage.fiveHourResetsAt {
-                        Text("resets in \(Self.zaiResetsIn(from: resets))")
-                            .font(Self.footnoteFont)
-                            .foregroundColor(.secondary)
+                        if let resets = usage.fiveHourResetsAt {
+                            Text("resets in \(Self.zaiResetsIn(from: resets))")
+                                .font(Self.footnoteFont)
+                                .foregroundColor(.secondary)
+                        }
                     }
+
+                    // Bar under the 5-hour window too.
+                    UsageBar(percent: fiveHour, color: Self.usageColor(fiveHour))
                 }
             }
 
@@ -380,7 +406,18 @@ struct MenuView: View {
                     zaiWindow("Weekly", percent: weekly, resetsAt: usage.weeklyResetsAt)
                 }
             }
+
+            // Sparkline for the z.ai 5-hour % history.
+            sparkline(
+                values: viewModel.zaiSparklineValues,
+                color: Self.usageColor(zaiFiveHourPercent ?? 0)
+            )
         }
+    }
+
+    /// The current z.ai 5-hour percentage, or 0 if absent. Used for sparkline color.
+    private var zaiFiveHourPercent: Int? {
+        viewModel.zaiFiveHourPercent
     }
 
     /// One window row for z.ai: label, percentage, and a hairline bar.
@@ -523,42 +560,7 @@ struct MenuView: View {
                 .keyboardShortcut("q")
             }
             .controlSize(.small)
-
-            Link("hyper.charm.land", destination: Self.websiteURL)
-                .font(Self.footnoteFont)
-                .foregroundColor(.secondary)
-                .opacity(0.7)
-                .frame(maxWidth: .infinity, alignment: .center)
         }
-    }
-}
-
-// MARK: - Loading
-
-/// The loading state, before there has ever been a balance to show. Reuses the ⚡ from
-/// the menu bar title rather than a generic spinner, so the two read as the same app.
-private struct PulsingBolt: View {
-    @State private var isPulsing = false
-
-    var body: some View {
-        VStack(spacing: 6) {
-            Text("⚡")
-                .font(.system(size: 34))
-                .opacity(isPulsing ? 0.35 : 1)
-                .scaleEffect(isPulsing ? 0.94 : 1)
-                .animation(
-                    .easeInOut(duration: 0.9).repeatForever(autoreverses: true),
-                    value: isPulsing
-                )
-                // Roughly the height of the balance it stands in for, so the hero
-                // doesn't jump when the first fetch lands.
-                .frame(height: 56)
-
-            Text("Loading…")
-                .font(.system(size: 11, weight: .medium, design: .rounded))
-                .foregroundColor(.secondary)
-        }
-        .onAppear { isPulsing = true }
     }
 }
 
@@ -592,8 +594,8 @@ private struct UsageBar: View {
 
 // MARK: - Sparkline
 
-/// A minimal line chart of recent balances: no axes, no labels, no grid. The stroke
-/// takes the balance's color so the trend reads as part of the number above it, with a
+/// A minimal line chart of recent values: no axes, no labels, no grid. The stroke
+/// takes the metric's color so the trend reads as part of the number above it, with a
 /// faint fade underneath for weight and a dot marking the latest point.
 ///
 /// Points are spaced evenly by index rather than by timestamp, which keeps the shape
