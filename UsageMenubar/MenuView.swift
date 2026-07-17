@@ -455,7 +455,8 @@ struct MenuView: View {
     }
 
     /// z.ai peak hours: 14:00–18:00 CST (UTC+8), i.e. 06:00–10:00 UTC.
-    /// Limits are most likely to bind during this window.
+    /// Limits are most likely to bind during this window. Displayed in the
+    /// user's local timezone so they know when to expect slowdowns.
     private var zaiPeakHours: some View {
         let inPeak = ViewModel.zaiInPeakHours
 
@@ -464,10 +465,29 @@ struct MenuView: View {
                 .fill(inPeak ? Color.orange : Color.secondary.opacity(0.4))
                 .frame(width: 6, height: 6)
 
-            Text(inPeak ? "Peak hours now" : "Peak 14:00–18:00 CST")
+            Text(inPeak ? "Peak hours now" : "Peak \(Self.zaiPeakHoursLocal)")
                 .font(Self.footnoteFont)
                 .foregroundColor(inPeak ? .orange : .secondary)
         }
+    }
+
+    /// z.ai peak hours converted to the user's local timezone, e.g. "09:00–13:00".
+    private static var zaiPeakHoursLocal: String {
+        let formatter = DateFormatter()
+        formatter.timeZone = TimeZone.current
+        formatter.dateFormat = "HH:mm"
+
+        var utc = DateComponents()
+        utc.timeZone = TimeZone(identifier: "UTC")
+        utc.hour = 6
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let start = calendar.date(from: utc)!
+
+        utc.hour = 10
+        let end = calendar.date(from: utc)!
+
+        return "\(formatter.string(from: start))–\(formatter.string(from: end))"
     }
 
     /// Formats the time until a z.ai window resets, e.g. "3h 20m".
